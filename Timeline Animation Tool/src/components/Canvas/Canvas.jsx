@@ -105,7 +105,15 @@ const Canvas = () => {
       if (!fabricObject) return;
 
       const { before, after } = findSurroundingKeyframes(objectKeyframes, currentTime);
-      const interpolated = interpolateProperties(before, after, currentTime);
+      // Get easing for this segment (use easing of the 'after' keyframe)
+      let easingType = 'linear';
+      if (before && after && before !== after) {
+        const afterIndex = objectKeyframes.indexOf(after);
+        // You'll add easing data to keyframes in Phase 3
+        easingType = after.easing || 'linear';
+      }
+      
+      const interpolated = interpolateProperties(before, after, currentTime, easingType);
       
       if (interpolated) {
         applyPropertiesToFabricObject(fabricObject, interpolated);
@@ -113,6 +121,15 @@ const Canvas = () => {
     });
 
     fabricCanvas.renderAll();
+    // Phase-1 & 2 version code:
+    //   const interpolated = interpolateProperties(before, after, currentTime);
+      
+    //   if (interpolated) {
+    //     applyPropertiesToFabricObject(fabricObject, interpolated);
+    //   }
+    // });
+
+    // fabricCanvas.renderAll();
   }, [currentTime, keyframes, canvasObjects, fabricCanvas]);
 
   return (

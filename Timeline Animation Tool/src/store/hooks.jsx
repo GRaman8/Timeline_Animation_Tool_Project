@@ -9,6 +9,11 @@ import {
   isPlayingState,
   fabricCanvasState,
   selectedObjectPropertiesState,
+  keyframeEasingState,
+  loopPlaybackState,
+  timelineZoomState,
+  selectedKeyframeState,
+  snapToKeyframesState,
 } from './atoms';
 
 import {
@@ -56,4 +61,29 @@ export const useSelectedObjectDetails = () => {
 
 export const useSelectedObjectKeyframes = () => {
   return useRecoilValue(selectedObjectKeyframesSelector);
+};
+
+
+// Phase-3 code: 
+
+// ADD these new hooks at the bottom of the file:
+
+export const useKeyframeEasing = () => {
+  return useRecoilState(keyframeEasingState);
+};
+
+export const useLoopPlayback = () => {
+  return useRecoilState(loopPlaybackState);
+};
+
+export const useTimelineZoom = () => {
+  return useRecoilState(timelineZoomState);
+};
+
+export const useSelectedKeyframe = () => {
+  return useRecoilState(selectedKeyframeState);
+};
+
+export const useSnapToKeyframes = () => {
+  return useRecoilState(snapToKeyframesState);
 };
