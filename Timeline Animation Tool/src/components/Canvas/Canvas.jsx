@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Paper, Box } from '@mui/material';
 import * as fabric from 'fabric';
 
@@ -8,7 +8,8 @@ import {
   useSelectedObjectProperties,
   useCurrentTime,
   useKeyframes,
-  useCanvasObjects 
+  useCanvasObjects,
+  useIsPlaying
 } from '../../store/hooks';
 
 import { 
@@ -30,6 +31,11 @@ const Canvas = () => {
   const [currentTime] = useCurrentTime();
   const [keyframes] = useKeyframes();
   const [canvasObjects, setCanvasObjects] = useCanvasObjects();
+  const [isPlaying] = useIsPlaying();
+  
+  // Track if user is currently interacting with an object
+  const [isInteracting, setIsInteracting] = useState(false);
+  const interactingObjectRef = useRef(null);
 
   // Initialize Fabric.js canvas
   useEffect(() => {
@@ -39,24 +45,41 @@ const Canvas = () => {
       width: 1200,
       height: 600,
       backgroundColor: '#f0f0f0',
+      selection: true, // Enable multi-selection
+      selectionColor: 'rgba(100, 100, 255, 0.3)', // Light blue selection box
+      selectionBorderColor: 'rgba(50, 50, 200, 0.8)', // Darker blue border
+      selectionLineWidth: 2,
     });
 
     setFabricCanvas(canvas);
 
     // Selection event handlers
     canvas.on('selection:created', (e) => {
-      if (e.selected && e.selected[0]) {
-        const id = e.selected[0].id;
-        setSelectedObject(id);
-        updateProperties(e.selected[0]);
+      if (e.selected) {
+        if (e.selected.length === 1) {
+          // Single object selected
+          const id = e.selected[0].id;
+          setSelectedObject(id);
+          updateProperties(e.selected[0]);
+        } else if (e.selected.length > 1) {
+          // Multiple objects selected
+          setSelectedObject(null); // Clear single selection
+          // Update properties to show first selected object
+          updateProperties(e.selected[0]);
+        }
       }
     });
 
     canvas.on('selection:updated', (e) => {
-      if (e.selected && e.selected[0]) {
-        const id = e.selected[0].id;
-        setSelectedObject(id);
-        updateProperties(e.selected[0]);
+      if (e.selected) {
+        if (e.selected.length === 1) {
+          const id = e.selected[0].id;
+          setSelectedObject(id);
+          updateProperties(e.selected[0]);
+        } else if (e.selected.length > 1) {
+          setSelectedObject(null);
+          updateProperties(e.selected[0]);
+        }
       }
     });
 
@@ -64,16 +87,28 @@ const Canvas = () => {
       setSelectedObject(null);
     });
 
-    // Update the object:modified handler (around line 65)
     canvas.on('object:modified', (e) => {
       if (e.target) {
         updateProperties(e.target);
-        // Force re-render to ensure state sync
         canvas.renderAll();
       }
     });
 
-    // Add object:moving handler for real-time updates
+    // Track when user starts interacting
+    canvas.on('mouse:down', (e) => {
+      if (e.target) {
+        setIsInteracting(true);
+        interactingObjectRef.current = e.target.id;
+      }
+    });
+
+    // Track when user stops interacting
+    canvas.on('mouse:up', () => {
+      setIsInteracting(false);
+      interactingObjectRef.current = null;
+    });
+
+    // Real-time updates during interaction
     canvas.on('object:moving', (e) => {
       if (e.target) {
         updateProperties(e.target);
@@ -92,7 +127,7 @@ const Canvas = () => {
       }
     });
 
-    // Update the double-click handler (around line 75)
+    // Text editing handler
     canvas.on('mouse:dblclick', (e) => {
       if (e.target && e.target.type === 'text') {
         const newText = prompt('Enter new text:', e.target.text);
@@ -123,8 +158,12 @@ const Canvas = () => {
   };
 
   // Update canvas when time changes (for animation playback)
+  // BUT skip updates if user is actively interacting with an object
   useEffect(() => {
     if (!fabricCanvas) return;
+    
+    // Don't interpolate if user is dragging/modifying an object
+    if (isInteracting) return;
 
     canvasObjects.forEach(obj => {
       const objectKeyframes = keyframes[obj.id] || [];
@@ -133,12 +172,16 @@ const Canvas = () => {
       const fabricObject = findFabricObjectById(fabricCanvas, obj.id);
       if (!fabricObject) return;
 
+      // Don't update the currently selected object unless playing
+      if (fabricObject.id === selectedObject && !isPlaying) {
+        return;
+      }
+
       const { before, after } = findSurroundingKeyframes(objectKeyframes, currentTime);
-      // Get easing for this segment (use easing of the 'after' keyframe)
+      
+      // Get easing for this segment
       let easingType = 'linear';
       if (before && after && before !== after) {
-        const afterIndex = objectKeyframes.indexOf(after);
-        // You'll add easing data to keyframes in Phase 3
         easingType = after.easing || 'linear';
       }
       
@@ -150,16 +193,7 @@ const Canvas = () => {
     });
 
     fabricCanvas.renderAll();
-    // Phase-1 & 2 version code:
-    //   const interpolated = interpolateProperties(before, after, currentTime);
-      
-    //   if (interpolated) {
-    //     applyPropertiesToFabricObject(fabricObject, interpolated);
-    //   }
-    // });
-
-    // fabricCanvas.renderAll();
-  }, [currentTime, keyframes, canvasObjects, fabricCanvas]);
+  }, [currentTime, keyframes, canvasObjects, fabricCanvas, isInteracting, selectedObject, isPlaying]);
 
   return (
     <Box sx={{ mb: 2, display: 'flex', justifyContent: 'center' }}>

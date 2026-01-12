@@ -41,6 +41,91 @@ const PropertiesPanel = () => {
     }
   }, [currentTime, selectedObject, fabricCanvas, keyframes, setProperties]);
 
+  // Handle opacity change
+  const handleOpacityChange = (event, newValue) => {
+    if (!selectedObject || !fabricCanvas) return;
+
+    const fabricObject = findFabricObjectById(fabricCanvas, selectedObject);
+    if (!fabricObject) return;
+
+    // Update fabric object
+    fabricObject.set('opacity', newValue);
+    fabricCanvas.renderAll();
+
+    // Update state
+    setProperties(prev => ({
+      ...prev,
+      opacity: newValue
+    }));
+  };
+
+  // Handle position change
+  const handlePositionChange = (axis, value) => {
+    if (!selectedObject || !fabricCanvas) return;
+
+    const fabricObject = findFabricObjectById(fabricCanvas, selectedObject);
+    if (!fabricObject) return;
+
+    const numValue = parseFloat(value);
+    if (isNaN(numValue)) return;
+
+    if (axis === 'x') {
+      fabricObject.set('left', numValue);
+    } else {
+      fabricObject.set('top', numValue);
+    }
+    
+    fabricCanvas.renderAll();
+
+    const props = extractPropertiesFromFabricObject(fabricObject);
+    if (props) {
+      setProperties(props);
+    }
+  };
+
+  // Handle rotation change
+  const handleRotationChange = (value) => {
+    if (!selectedObject || !fabricCanvas) return;
+
+    const fabricObject = findFabricObjectById(fabricCanvas, selectedObject);
+    if (!fabricObject) return;
+
+    const numValue = parseFloat(value);
+    if (isNaN(numValue)) return;
+
+    fabricObject.set('angle', numValue);
+    fabricCanvas.renderAll();
+
+    const props = extractPropertiesFromFabricObject(fabricObject);
+    if (props) {
+      setProperties(props);
+    }
+  };
+
+  // Handle scale change
+  const handleScaleChange = (axis, value) => {
+    if (!selectedObject || !fabricCanvas) return;
+
+    const fabricObject = findFabricObjectById(fabricCanvas, selectedObject);
+    if (!fabricObject) return;
+
+    const numValue = parseFloat(value);
+    if (isNaN(numValue) || numValue <= 0) return;
+
+    if (axis === 'x') {
+      fabricObject.set('scaleX', numValue);
+    } else {
+      fabricObject.set('scaleY', numValue);
+    }
+    
+    fabricCanvas.renderAll();
+
+    const props = extractPropertiesFromFabricObject(fabricObject);
+    if (props) {
+      setProperties(props);
+    }
+  };
+
   return (
     <Drawer
       variant="permanent"
@@ -81,11 +166,9 @@ const PropertiesPanel = () => {
                 type="number"
                 value={Math.round(properties.x)}
                 size="small"
-                disabled
                 fullWidth
-                InputProps={{
-                  readOnly: true,
-                }}
+                onChange={(e) => handlePositionChange('x', e.target.value)}
+                onBlur={(e) => handlePositionChange('x', e.target.value)}
               />
               
               <TextField
@@ -93,11 +176,9 @@ const PropertiesPanel = () => {
                 type="number"
                 value={Math.round(properties.y)}
                 size="small"
-                disabled
                 fullWidth
-                InputProps={{
-                  readOnly: true,
-                }}
+                onChange={(e) => handlePositionChange('y', e.target.value)}
+                onBlur={(e) => handlePositionChange('y', e.target.value)}
               />
               
               <TextField
@@ -105,11 +186,10 @@ const PropertiesPanel = () => {
                 type="number"
                 value={properties.scaleX.toFixed(2)}
                 size="small"
-                disabled
                 fullWidth
-                InputProps={{
-                  readOnly: true,
-                }}
+                onChange={(e) => handleScaleChange('x', e.target.value)}
+                onBlur={(e) => handleScaleChange('x', e.target.value)}
+                inputProps={{ step: 0.1, min: 0.1 }}
               />
               
               <TextField
@@ -117,11 +197,10 @@ const PropertiesPanel = () => {
                 type="number"
                 value={properties.scaleY.toFixed(2)}
                 size="small"
-                disabled
                 fullWidth
-                InputProps={{
-                  readOnly: true,
-                }}
+                onChange={(e) => handleScaleChange('y', e.target.value)}
+                onBlur={(e) => handleScaleChange('y', e.target.value)}
+                inputProps={{ step: 0.1, min: 0.1 }}
               />
               
               <TextField
@@ -129,11 +208,10 @@ const PropertiesPanel = () => {
                 type="number"
                 value={Math.round(properties.rotation)}
                 size="small"
-                disabled
                 fullWidth
-                InputProps={{
-                  readOnly: true,
-                }}
+                onChange={(e) => handleRotationChange(e.target.value)}
+                onBlur={(e) => handleRotationChange(e.target.value)}
+                inputProps={{ step: 1 }}
               />
               
               <Box>
@@ -145,7 +223,7 @@ const PropertiesPanel = () => {
                   min={0}
                   max={1}
                   step={0.01}
-                  disabled
+                  onChange={handleOpacityChange}
                   valueLabelDisplay="auto"
                   valueLabelFormat={(value) => `${(value * 100).toFixed(0)}%`}
                 />
@@ -159,9 +237,8 @@ const PropertiesPanel = () => {
               sx={{ p: 2, bgcolor: 'info.light', color: 'info.contrastText' }}
             >
               <Typography variant="body2" sx={{ lineHeight: 1.6 }}>
-                💡 <strong>Tip:</strong> Properties update as you scrub through time. 
-                Modify the object on the stage, then click "Add Keyframe" to record its 
-                state at the current time.
+                💡 <strong>Tip:</strong> All properties are now editable! Change values here 
+                or drag objects on the canvas. Click "Add Keyframe" to record the current state.
               </Typography>
             </Paper>
           </Box>
