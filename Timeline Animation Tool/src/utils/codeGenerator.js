@@ -47,14 +47,16 @@ body {
 
 #animation-container {
     position: relative;
-    width: 1200px;
-    height: 600px;
+    width: 1200px;  /* Matches editor canvas width */
+    height: 600px;  /* Matches editor canvas height */
     background-color: #f0f0f0;
-    margin: 0 auto;
+    margin: 20px auto;
+    border: 1px solid #ccc;
 }
 
 `;
 
+  // ... rest of function
   // Generate styles for each object
   canvasObjects.forEach(obj => {
     const objKeyframes = keyframes[obj.id] || [];
@@ -129,19 +131,20 @@ document.addEventListener('DOMContentLoaded', () => {
     const objKeyframes = keyframes[obj.id] || [];
     if (objKeyframes.length === 0) return;
 
-    js += `    // Create ${obj.name}
+    js += `// Create ${obj.name}
     const ${obj.id} = document.createElement('div');
-    ${obj.id}.id = '${obj.id}';
-`;
+    ${obj.id}.id = '${obj.id}';`;
 
+    // Add text content for text elements
     if (obj.type === 'text') {
-      js += `    ${obj.id}.textContent = 'Text';
-`;
+      // Get the actual text from the first keyframe or use default
+      const firstKf = objKeyframes[0];
+      // The text content should be stored in the fabricObject
+      // We need to pass this through from the canvas
+      js += `${obj.id}.textContent = '${obj.textContent || 'Text'}';` ;
     }
 
-    js += `    container.appendChild(${obj.id});
-    
-`;
+    js += `container.appendChild(${obj.id});`;
   });
 
   // Add animations

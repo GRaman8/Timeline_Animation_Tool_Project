@@ -1,12 +1,14 @@
 import React, { useEffect, useRef } from 'react';
 import { Box, Paper, Typography } from '@mui/material';
 import gsap from 'gsap';
-import { useCanvasObjects, useKeyframes, useDuration } from '../../store/hooks';
+import { useCanvasObjects, useKeyframes, useDuration, useFabricCanvas } from '../../store/hooks';
+import { findFabricObjectById } from '../../utils/fabricHelpers';
 
 const LivePreview = () => {
   const [canvasObjects] = useCanvasObjects();
   const [keyframes] = useKeyframes();
   const [duration] = useDuration();
+  const [fabricCanvas] = useFabricCanvas();
   const containerRef = useRef(null);
   const timelineRef = useRef(null);
 
@@ -42,9 +44,14 @@ const LivePreview = () => {
         el.style.borderRadius = '50%';
         el.style.backgroundColor = '#ef4444';
       } else if (obj.type === 'text') {
-        el.textContent = 'Text';
+        // Get text from fabric canvas
+        const fabricObject = findFabricObjectById(fabricCanvas, obj.id);
+        const textContent = fabricObject?.text || obj.textContent || 'Text';
+        
+        el.textContent = textContent;
         el.style.fontSize = '24px';
         el.style.color = '#000000';
+        el.style.whiteSpace = 'nowrap';
       }
 
       containerRef.current.appendChild(el);
@@ -84,12 +91,15 @@ const LivePreview = () => {
         timelineRef.current.kill();
       }
     };
-  }, [canvasObjects, keyframes, duration]);
+  }, [canvasObjects, keyframes, duration, fabricCanvas]);
 
   return (
     <Paper sx={{ p: 2, mt: 2 }}>
       <Typography variant="h6" gutterBottom>
-        Live Preview
+        Live Preview (GSAP)
+      </Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        This preview uses GSAP and matches the exported code exactly
       </Typography>
       <Box
         ref={containerRef}

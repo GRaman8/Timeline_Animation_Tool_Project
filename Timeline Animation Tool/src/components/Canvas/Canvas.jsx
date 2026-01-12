@@ -29,7 +29,7 @@ const Canvas = () => {
   const [, setSelectedObjectProperties] = useSelectedObjectProperties();
   const [currentTime] = useCurrentTime();
   const [keyframes] = useKeyframes();
-  const [canvasObjects] = useCanvasObjects();
+  const [canvasObjects, setCanvasObjects] = useCanvasObjects();
 
   // Initialize Fabric.js canvas
   useEffect(() => {
@@ -64,19 +64,48 @@ const Canvas = () => {
       setSelectedObject(null);
     });
 
+    // Update the object:modified handler (around line 65)
     canvas.on('object:modified', (e) => {
+      if (e.target) {
+        updateProperties(e.target);
+        // Force re-render to ensure state sync
+        canvas.renderAll();
+      }
+    });
+
+    // Add object:moving handler for real-time updates
+    canvas.on('object:moving', (e) => {
       if (e.target) {
         updateProperties(e.target);
       }
     });
 
-    // ADD THIS NEW HANDLER FOR TEXT EDITING
+    canvas.on('object:scaling', (e) => {
+      if (e.target) {
+        updateProperties(e.target);
+      }
+    });
+
+    canvas.on('object:rotating', (e) => {
+      if (e.target) {
+        updateProperties(e.target);
+      }
+    });
+
+    // Update the double-click handler (around line 75)
     canvas.on('mouse:dblclick', (e) => {
       if (e.target && e.target.type === 'text') {
         const newText = prompt('Enter new text:', e.target.text);
         if (newText !== null && newText !== '') {
           e.target.set('text', newText);
           canvas.renderAll();
+          
+          // Update state to store text content
+          setCanvasObjects(prev => prev.map(obj => 
+            obj.id === e.target.id 
+              ? { ...obj, textContent: newText }
+              : obj
+          ));
         }
       }
     });

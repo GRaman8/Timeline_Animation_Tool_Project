@@ -202,8 +202,8 @@ const PlaybackControls = () => {
       if (elapsed >= duration) {
         if (loopPlayback) {
           // Loop back to start
-          playbackStartTimeRef.current = Date.now();
           setCurrentTime(0);
+          playbackStartTimeRef.current = Date.now(); // Reset the start time
           animationFrameRef.current = requestAnimationFrame(animate);
         } else {
           setCurrentTime(duration);
@@ -323,6 +323,21 @@ const PlaybackControls = () => {
           <IconButton onClick={handleStepPrevious} size="small">
             <SkipPrevious />
           </IconButton>
+        </Tooltip>
+
+        <Tooltip title="Loop animation continuously. Uncheck to stop after current loop completes.">
+          <FormControlLabel
+            control={
+              <Checkbox 
+                checked={loopPlayback}
+                onChange={(e) => setLoopPlayback(e.target.checked)}
+                icon={<Replay />}
+                checkedIcon={<Replay color="primary" />}
+              />
+            }
+            label="Loop"
+            sx={{ ml: 2 }}
+          />
         </Tooltip>
 
         <IconButton 

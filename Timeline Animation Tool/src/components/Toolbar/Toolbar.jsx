@@ -20,45 +20,70 @@ import { useSelectedObject, useFabricCanvas, useCanvasObjects, useKeyframes } fr
 import { createFabricObject } from '../../utils/fabricHelpers';
 
 const Toolbar = () => {
-  const [selectedObject] = useSelectedObject();
+  const [selectedObject, setSelectedObject] = useSelectedObject();
   const [fabricCanvas] = useFabricCanvas();
   const [canvasObjects, setCanvasObjects] = useCanvasObjects();
   const [keyframes, setKeyframes] = useKeyframes();
 
   const addElement = (type) => {
+      if (!fabricCanvas) return;
+
+      const id = `element_${Date.now()}`;
+      const count = canvasObjects.filter(obj => obj.type === type).length + 1;
+      const name = `${type}_${count}`;
+
+      const fabricObject = createFabricObject(type, id);
+      if (!fabricObject) return;
+
+      fabricCanvas.add(fabricObject);
+      fabricCanvas.setActiveObject(fabricObject);
+      fabricCanvas.renderAll();
+
+      // Add to state
+      // Add to state (around line 50)
+      setCanvasObjects(prev => [...prev, { 
+        id, 
+        type, 
+        name,
+        textContent: type === 'text' ? 'Text' : undefined // Store text content
+      }]);
+      setKeyframes(prev => ({ ...prev, [id]: [] }));
+    };
+
+    const deleteObject = () => {
     if (!fabricCanvas) return;
 
-    const id = `element_${Date.now()}`;
-    const count = canvasObjects.filter(obj => obj.type === type).length + 1;
-    const name = `${type}_${count}`;
-
-    const fabricObject = createFabricObject(type, id);
-    if (!fabricObject) return;
-
-    fabricCanvas.add(fabricObject);
-    fabricCanvas.setActiveObject(fabricObject);
-    fabricCanvas.renderAll();
-
-    // Add to state
-    setCanvasObjects(prev => [...prev, { id, type, name }]);
-    setKeyframes(prev => ({ ...prev, [id]: [] }));
-  };
-
-  const deleteObject = () => {
-    if (!selectedObject || !fabricCanvas) return;
-
-    const fabricObject = fabricCanvas.getObjects().find(obj => obj.id === selectedObject);
-    if (fabricObject) {
-      fabricCanvas.remove(fabricObject);
-      fabricCanvas.renderAll();
+    // Get active objects (single or multiple selection)
+    const activeObjects = fabricCanvas.getActiveObjects();
+    
+    if (activeObjects.length === 0 && selectedObject) {
+      // Fallback to selectedObject if no active objects
+      const fabricObject = fabricCanvas.getObjects().find(obj => obj.id === selectedObject);
+      if (fabricObject) {
+        activeObjects.push(fabricObject);
+      }
     }
 
-    setCanvasObjects(prev => prev.filter(obj => obj.id !== selectedObject));
-    setKeyframes(prev => {
-      const updated = { ...prev };
-      delete updated[selectedObject];
-      return updated;
+    if (activeObjects.length === 0) return;
+
+    // Remove all selected objects
+    activeObjects.forEach(fabricObject => {
+      if (fabricObject && fabricObject.id) {
+        fabricCanvas.remove(fabricObject);
+        
+        // Remove from state
+        setCanvasObjects(prev => prev.filter(obj => obj.id !== fabricObject.id));
+        setKeyframes(prev => {
+          const updated = { ...prev };
+          delete updated[fabricObject.id];
+          return updated;
+        });
+      }
     });
+
+    fabricCanvas.discardActiveObject();
+    fabricCanvas.renderAll();
+    setSelectedObject(null);
   };
 
   const moveLayer = (direction) => {

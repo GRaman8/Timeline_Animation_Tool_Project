@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { 
   Box, 
   Drawer, 
@@ -11,15 +11,35 @@ import {
 import { 
   useSelectedObject, 
   useSelectedObjectProperties,
-  useSelectedObjectDetails 
+  useSelectedObjectDetails,
+  useCurrentTime,
+  useKeyframes,
+  useFabricCanvas
 } from '../../store/hooks';
+import { findFabricObjectById, extractPropertiesFromFabricObject } from '../../utils/fabricHelpers';
 
 const PropertiesPanel = () => {
   const [selectedObject] = useSelectedObject();
-  const [properties] = useSelectedObjectProperties();
+  const [properties, setProperties] = useSelectedObjectProperties();
   const selectedDetails = useSelectedObjectDetails();
+  const [currentTime] = useCurrentTime();
+  const [keyframes] = useKeyframes();
+  const [fabricCanvas] = useFabricCanvas();
 
   const drawerWidth = 300;
+
+  // Update properties when time changes
+  useEffect(() => {
+    if (!selectedObject || !fabricCanvas) return;
+
+    const fabricObject = findFabricObjectById(fabricCanvas, selectedObject);
+    if (!fabricObject) return;
+
+    const props = extractPropertiesFromFabricObject(fabricObject);
+    if (props) {
+      setProperties(props);
+    }
+  }, [currentTime, selectedObject, fabricCanvas, keyframes, setProperties]);
 
   return (
     <Drawer
@@ -139,8 +159,8 @@ const PropertiesPanel = () => {
               sx={{ p: 2, bgcolor: 'info.light', color: 'info.contrastText' }}
             >
               <Typography variant="body2" sx={{ lineHeight: 1.6 }}>
-                💡 <strong>Tip:</strong> Modify the object on the stage by dragging, 
-                resizing, or rotating it. Then click "Add Keyframe" to record its 
+                💡 <strong>Tip:</strong> Properties update as you scrub through time. 
+                Modify the object on the stage, then click "Add Keyframe" to record its 
                 state at the current time.
               </Typography>
             </Paper>
