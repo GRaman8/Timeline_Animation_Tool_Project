@@ -16,7 +16,13 @@ import {
   KeyboardArrowUp as ArrowUpIcon,
   KeyboardArrowDown as ArrowDownIcon,
 } from '@mui/icons-material';
-import { useSelectedObject, useFabricCanvas, useCanvasObjects, useKeyframes } from '../../store/hooks';
+import { 
+  useSelectedObject, 
+  useFabricCanvas, 
+  useCanvasObjects, 
+  useKeyframes,
+  useHasActiveSelection // ADD THIS
+} from '../../store/hooks';
 import { createFabricObject } from '../../utils/fabricHelpers';
 
 const Toolbar = () => {
@@ -24,40 +30,37 @@ const Toolbar = () => {
   const [fabricCanvas] = useFabricCanvas();
   const [canvasObjects, setCanvasObjects] = useCanvasObjects();
   const [keyframes, setKeyframes] = useKeyframes();
+  const [hasActiveSelection] = useHasActiveSelection(); // ADD THIS
 
   const addElement = (type) => {
-      if (!fabricCanvas) return;
-
-      const id = `element_${Date.now()}`;
-      const count = canvasObjects.filter(obj => obj.type === type).length + 1;
-      const name = `${type}_${count}`;
-
-      const fabricObject = createFabricObject(type, id);
-      if (!fabricObject) return;
-
-      fabricCanvas.add(fabricObject);
-      fabricCanvas.setActiveObject(fabricObject);
-      fabricCanvas.renderAll();
-
-      // Add to state
-      // Add to state (around line 50)
-      setCanvasObjects(prev => [...prev, { 
-        id, 
-        type, 
-        name,
-        textContent: type === 'text' ? 'Text' : undefined // Store text content
-      }]);
-      setKeyframes(prev => ({ ...prev, [id]: [] }));
-    };
-
-    const deleteObject = () => {
     if (!fabricCanvas) return;
 
-    // Get active objects (single or multiple selection)
+    const id = `element_${Date.now()}`;
+    const count = canvasObjects.filter(obj => obj.type === type).length + 1;
+    const name = `${type}_${count}`;
+
+    const fabricObject = createFabricObject(type, id);
+    if (!fabricObject) return;
+
+    fabricCanvas.add(fabricObject);
+    fabricCanvas.setActiveObject(fabricObject);
+    fabricCanvas.renderAll();
+
+    setCanvasObjects(prev => [...prev, { 
+      id, 
+      type, 
+      name,
+      textContent: type === 'text' ? 'Text' : undefined
+    }]);
+    setKeyframes(prev => ({ ...prev, [id]: [] }));
+  };
+
+  const deleteObject = () => {
+    if (!fabricCanvas) return;
+
     const activeObjects = fabricCanvas.getActiveObjects();
     
     if (activeObjects.length === 0 && selectedObject) {
-      // Fallback to selectedObject if no active objects
       const fabricObject = fabricCanvas.getObjects().find(obj => obj.id === selectedObject);
       if (fabricObject) {
         activeObjects.push(fabricObject);
@@ -66,12 +69,10 @@ const Toolbar = () => {
 
     if (activeObjects.length === 0) return;
 
-    // Remove all selected objects
     activeObjects.forEach(fabricObject => {
       if (fabricObject && fabricObject.id) {
         fabricCanvas.remove(fabricObject);
         
-        // Remove from state
         setCanvasObjects(prev => prev.filter(obj => obj.id !== fabricObject.id));
         setKeyframes(prev => {
           const updated = { ...prev };
@@ -87,16 +88,27 @@ const Toolbar = () => {
   };
 
   const moveLayer = (direction) => {
-    if (!selectedObject || !fabricCanvas) return;
-
-    const fabricObject = fabricCanvas.getObjects().find(obj => obj.id === selectedObject);
-    if (!fabricObject) return;
-
-    if (direction === 'up') {
-      fabricCanvas.bringForward(fabricObject);
-    } else {
-      fabricCanvas.sendBackwards(fabricObject);
+    if (!fabricCanvas) return;
+    
+    const activeObjects = fabricCanvas.getActiveObjects();
+    
+    if (activeObjects.length === 0 && selectedObject) {
+      const fabricObject = fabricCanvas.getObjects().find(obj => obj.id === selectedObject);
+      if (fabricObject) {
+        activeObjects.push(fabricObject);
+      }
     }
+
+    if (activeObjects.length === 0) return;
+
+    activeObjects.forEach(fabricObject => {
+      if (direction === 'up') {
+        fabricCanvas.bringForward(fabricObject);
+      } else {
+        fabricCanvas.sendBackwards(fabricObject);
+      }
+    });
+    
     fabricCanvas.renderAll();
   };
 
@@ -131,11 +143,11 @@ const Toolbar = () => {
       
       <Divider sx={{ my: 1 }} />
       
-      <Tooltip title="Delete" placement="right">
+      <Tooltip title="Delete Selected" placement="right">
         <span>
           <IconButton 
             onClick={deleteObject} 
-            disabled={!selectedObject}
+            disabled={!hasActiveSelection}
             color="error"
           >
             <DeleteIcon />
@@ -147,7 +159,7 @@ const Toolbar = () => {
         <span>
           <IconButton 
             onClick={() => moveLayer('up')} 
-            disabled={!selectedObject}
+            disabled={!hasActiveSelection}
           >
             <ArrowUpIcon />
           </IconButton>
@@ -158,7 +170,7 @@ const Toolbar = () => {
         <span>
           <IconButton 
             onClick={() => moveLayer('down')} 
-            disabled={!selectedObject}
+            disabled={!hasActiveSelection}
           >
             <ArrowDownIcon />
           </IconButton>

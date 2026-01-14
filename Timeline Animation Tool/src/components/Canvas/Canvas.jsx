@@ -9,7 +9,8 @@ import {
   useCurrentTime,
   useKeyframes,
   useCanvasObjects,
-  useIsPlaying
+  useIsPlaying,
+  useHasActiveSelection // ADD THIS
 } from '../../store/hooks';
 
 import { 
@@ -32,6 +33,7 @@ const Canvas = () => {
   const [keyframes] = useKeyframes();
   const [canvasObjects, setCanvasObjects] = useCanvasObjects();
   const [isPlaying] = useIsPlaying();
+  const [, setHasActiveSelection] = useHasActiveSelection(); // ADD THIS
   
   // Track if user is currently interacting with an object
   const [isInteracting, setIsInteracting] = useState(false);
@@ -45,9 +47,9 @@ const Canvas = () => {
       width: 1200,
       height: 600,
       backgroundColor: '#f0f0f0',
-      selection: true, // Enable multi-selection
-      selectionColor: 'rgba(100, 100, 255, 0.3)', // Light blue selection box
-      selectionBorderColor: 'rgba(50, 50, 200, 0.8)', // Darker blue border
+      selection: true,
+      selectionColor: 'rgba(100, 100, 255, 0.3)',
+      selectionBorderColor: 'rgba(50, 50, 200, 0.8)',
       selectionLineWidth: 2,
     });
 
@@ -55,22 +57,23 @@ const Canvas = () => {
 
     // Selection event handlers
     canvas.on('selection:created', (e) => {
+      setHasActiveSelection(true); // UPDATE SELECTION STATE
+      
       if (e.selected) {
         if (e.selected.length === 1) {
-          // Single object selected
           const id = e.selected[0].id;
           setSelectedObject(id);
           updateProperties(e.selected[0]);
         } else if (e.selected.length > 1) {
-          // Multiple objects selected
-          setSelectedObject(null); // Clear single selection
-          // Update properties to show first selected object
+          setSelectedObject(null);
           updateProperties(e.selected[0]);
         }
       }
     });
 
     canvas.on('selection:updated', (e) => {
+      setHasActiveSelection(true); // UPDATE SELECTION STATE
+      
       if (e.selected) {
         if (e.selected.length === 1) {
           const id = e.selected[0].id;
@@ -84,6 +87,7 @@ const Canvas = () => {
     });
 
     canvas.on('selection:cleared', () => {
+      setHasActiveSelection(false); // UPDATE SELECTION STATE
       setSelectedObject(null);
     });
 
@@ -135,7 +139,6 @@ const Canvas = () => {
           e.target.set('text', newText);
           canvas.renderAll();
           
-          // Update state to store text content
           setCanvasObjects(prev => prev.map(obj => 
             obj.id === e.target.id 
               ? { ...obj, textContent: newText }
@@ -157,12 +160,9 @@ const Canvas = () => {
     }
   };
 
-  // Update canvas when time changes (for animation playback)
-  // BUT skip updates if user is actively interacting with an object
+  // Update canvas when time changes
   useEffect(() => {
     if (!fabricCanvas) return;
-    
-    // Don't interpolate if user is dragging/modifying an object
     if (isInteracting) return;
 
     canvasObjects.forEach(obj => {
@@ -172,14 +172,12 @@ const Canvas = () => {
       const fabricObject = findFabricObjectById(fabricCanvas, obj.id);
       if (!fabricObject) return;
 
-      // Don't update the currently selected object unless playing
       if (fabricObject.id === selectedObject && !isPlaying) {
         return;
       }
 
       const { before, after } = findSurroundingKeyframes(objectKeyframes, currentTime);
       
-      // Get easing for this segment
       let easingType = 'linear';
       if (before && after && before !== after) {
         easingType = after.easing || 'linear';

@@ -89,3 +89,9 @@ export const snapToKeyframesState = atom({
   key: 'snapToKeyframesState',
   default: false,
 });
+
+// Track if any objects are selected (for toolbar button states)
+export const hasActiveSelectionState = atom({
+  key: 'hasActiveSelectionState',
+  default: false,
+});

@@ -14,6 +14,7 @@ import {
   timelineZoomState,
   selectedKeyframeState,
   snapToKeyframesState,
+  hasActiveSelectionState,
 } from './atoms';
 
 import {
@@ -86,4 +87,8 @@ export const useSelectedKeyframe = () => {
 
 export const useSnapToKeyframes = () => {
   return useRecoilState(snapToKeyframesState);
+};
+
+export const useHasActiveSelection = () => {
+  return useRecoilState(hasActiveSelectionState);
 };
