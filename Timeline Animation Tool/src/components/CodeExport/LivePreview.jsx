@@ -4,6 +4,27 @@ import gsap from 'gsap';
 import { useCanvasObjects, useKeyframes, useDuration, useFabricCanvas } from '../../store/hooks';
 import { findFabricObjectById } from '../../utils/fabricHelpers';
 
+/**
+ * Convert Fabric.js path array to SVG path string
+ */
+const fabricPathToSVGPath = (pathArray) => {
+  if (!pathArray || !Array.isArray(pathArray)) return '';
+  
+  let pathString = '';
+  
+  pathArray.forEach(segment => {
+    if (!Array.isArray(segment)) return;
+    
+    const command = segment[0];
+    const coords = segment.slice(1);
+    
+    pathString += command + ' ';
+    pathString += coords.join(' ') + ' ';
+  });
+  
+  return pathString.trim();
+};
+
 const LivePreview = () => {
   const [canvasObjects] = useCanvasObjects();
   const [keyframes] = useKeyframes();
@@ -29,29 +50,53 @@ const LivePreview = () => {
       const objKeyframes = keyframes[obj.id] || [];
       if (objKeyframes.length === 0) return;
 
-      // Create element
-      const el = document.createElement('div');
-      el.id = obj.id;
-      el.style.position = 'absolute';
+      let el;
 
-      if (obj.type === 'rectangle') {
-        el.style.width = '100px';
-        el.style.height = '100px';
-        el.style.backgroundColor = '#3b82f6';
-      } else if (obj.type === 'circle') {
-        el.style.width = '100px';
-        el.style.height = '100px';
-        el.style.borderRadius = '50%';
-        el.style.backgroundColor = '#ef4444';
-      } else if (obj.type === 'text') {
-        // Get text from fabric canvas
-        const fabricObject = findFabricObjectById(fabricCanvas, obj.id);
-        const textContent = fabricObject?.text || obj.textContent || 'Text';
+      // UPDATED: Handle different element types including paths
+      if (obj.type === 'path') {
+        // Create SVG element for paths
+        el = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        el.id = obj.id;
+        el.style.position = 'absolute';
+        el.style.overflow = 'visible';
+        el.style.pointerEvents = 'none';
+        el.setAttribute('width', '1600');
+        el.setAttribute('height', '800');
         
-        el.textContent = textContent;
-        el.style.fontSize = '24px';
-        el.style.color = '#000000';
-        el.style.whiteSpace = 'nowrap';
+        const pathElement = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        const pathString = fabricPathToSVGPath(obj.pathData);
+        pathElement.setAttribute('d', pathString);
+        pathElement.setAttribute('stroke', obj.strokeColor || '#000000');
+        pathElement.setAttribute('stroke-width', obj.strokeWidth || 3);
+        pathElement.setAttribute('fill', 'none');
+        pathElement.setAttribute('stroke-linecap', 'round');
+        pathElement.setAttribute('stroke-linejoin', 'round');
+        
+        el.appendChild(pathElement);
+      } else {
+        // Create regular div element
+        el = document.createElement('div');
+        el.id = obj.id;
+        el.style.position = 'absolute';
+
+        if (obj.type === 'rectangle') {
+          el.style.width = '100px';
+          el.style.height = '100px';
+          el.style.backgroundColor = '#3b82f6';
+        } else if (obj.type === 'circle') {
+          el.style.width = '100px';
+          el.style.height = '100px';
+          el.style.borderRadius = '50%';
+          el.style.backgroundColor = '#ef4444';
+        } else if (obj.type === 'text') {
+          const fabricObject = findFabricObjectById(fabricCanvas, obj.id);
+          const textContent = fabricObject?.text || obj.textContent || 'Text';
+          
+          el.textContent = textContent;
+          el.style.fontSize = '24px';
+          el.style.color = '#000000';
+          el.style.whiteSpace = 'nowrap';
+        }
       }
 
       containerRef.current.appendChild(el);
@@ -105,8 +150,8 @@ const LivePreview = () => {
         ref={containerRef}
         sx={{
           position: 'relative',
-          width: '1200px',
-          height: '600px',
+          width: '1600px',
+          height: '800px',
           bgcolor: '#f0f0f0',
           overflow: 'hidden',
           border: '1px solid',

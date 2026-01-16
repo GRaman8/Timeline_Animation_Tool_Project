@@ -15,14 +15,18 @@ import {
   Delete as DeleteIcon,
   KeyboardArrowUp as ArrowUpIcon,
   KeyboardArrowDown as ArrowDownIcon,
+  Brush as BrushIcon,
 } from '@mui/icons-material';
+
 import { 
   useSelectedObject, 
   useFabricCanvas, 
   useCanvasObjects, 
   useKeyframes,
-  useHasActiveSelection // ADD THIS
+  useHasActiveSelection,
+  useDrawingMode,
 } from '../../store/hooks';
+
 import { createFabricObject } from '../../utils/fabricHelpers';
 
 const Toolbar = () => {
@@ -31,6 +35,7 @@ const Toolbar = () => {
   const [canvasObjects, setCanvasObjects] = useCanvasObjects();
   const [keyframes, setKeyframes] = useKeyframes();
   const [hasActiveSelection] = useHasActiveSelection(); // ADD THIS
+  const [drawingMode, setDrawingMode] = useDrawingMode();
 
   const addElement = (type) => {
     if (!fabricCanvas) return;
@@ -112,6 +117,19 @@ const Toolbar = () => {
     fabricCanvas.renderAll();
   };
 
+  const toggleDrawingMode = () => {
+    if (!fabricCanvas) return;
+    
+    setDrawingMode(!drawingMode);
+    
+    // Deselect any active objects when entering drawing mode
+    if (!drawingMode) {
+      fabricCanvas.discardActiveObject();
+      fabricCanvas.renderAll();
+      setSelectedObject(null);
+    }
+  };
+
   return (
     <Paper 
       sx={{ 
@@ -138,6 +156,19 @@ const Toolbar = () => {
       <Tooltip title="Add Text" placement="right">
         <IconButton onClick={() => addElement('text')} color="primary">
           <TextIcon />
+        </IconButton>
+      </Tooltip>
+
+      <Tooltip title={drawingMode ? "Exit Drawing Mode (ESC)" : "Drawing Mode"} placement="right">
+        <IconButton 
+          onClick={toggleDrawingMode} 
+          color={drawingMode ? "secondary" : "primary"}
+          sx={{
+            // Only change color when active, no background
+            color: drawingMode ? 'secondary.main' : 'primary.main',
+          }}
+        >
+          <BrushIcon />
         </IconButton>
       </Tooltip>
       

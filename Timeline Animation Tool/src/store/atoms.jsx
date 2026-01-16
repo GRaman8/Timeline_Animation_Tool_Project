@@ -95,3 +95,26 @@ export const hasActiveSelectionState = atom({
   key: 'hasActiveSelectionState',
   default: false,
 });
+
+// Drawing mode state
+export const drawingModeState = atom({
+  key: 'drawingModeState',
+  default: false,
+});
+
+// Current drawing path
+export const currentDrawingPathState = atom({
+  key: 'currentDrawingPathState',
+  default: null,
+  dangerouslyAllowMutability: true,
+});
+
+// Drawing tool settings
+export const drawingToolSettingsState = atom({
+  key: 'drawingToolSettingsState',
+  default: {
+    color: '#000000',
+    strokeWidth: 3,
+    smoothing: true,
+  },
+});

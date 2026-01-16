@@ -10,12 +10,16 @@ import {
   useKeyframes,
   useCanvasObjects,
   useIsPlaying,
-  useHasActiveSelection // ADD THIS
+  useHasActiveSelection,
+  useDrawingMode,
+  useCurrentDrawingPath,
+  useDrawingToolSettings,
 } from '../../store/hooks';
 
 import { 
   extractPropertiesFromFabricObject,
-  findFabricObjectById 
+  findFabricObjectById,
+  createPathFromPoints, 
 } from '../../utils/fabricHelpers';
 
 import { 
@@ -30,14 +34,22 @@ const Canvas = () => {
   const [fabricCanvas, setFabricCanvas] = useFabricCanvas();
   const [, setSelectedObjectProperties] = useSelectedObjectProperties();
   const [currentTime] = useCurrentTime();
-  const [keyframes] = useKeyframes();
+  const [keyframes, setKeyframes] = useKeyframes();
   const [canvasObjects, setCanvasObjects] = useCanvasObjects();
   const [isPlaying] = useIsPlaying();
-  const [, setHasActiveSelection] = useHasActiveSelection(); // ADD THIS
+  const [, setHasActiveSelection] = useHasActiveSelection();
+  const [drawingMode, setDrawingMode] = useDrawingMode();
+  const [currentDrawingPath, setCurrentDrawingPath] = useCurrentDrawingPath();
+  const [drawingSettings] = useDrawingToolSettings();
   
   // Track if user is currently interacting with an object
   const [isInteracting, setIsInteracting] = useState(false);
   const interactingObjectRef = useRef(null);
+
+  //For Drawing
+  const isDrawingRef = useRef(false);
+  const drawingPointsRef = useRef([]);
+  const tempPathRef = useRef(null);
 
   // Initialize Fabric.js canvas
   useEffect(() => {
@@ -153,6 +165,163 @@ const Canvas = () => {
     };
   }, []);
 
+  // Drawing mode handler
+  useEffect(() => {
+    if (!fabricCanvas) return;
+
+    const handleMouseDown = (e) => {
+      if (!drawingMode) return;
+      
+      const pointer = fabricCanvas.getPointer(e.e);
+      isDrawingRef.current = true;
+      drawingPointsRef.current = [{ x: pointer.x, y: pointer.y }];
+      
+      // Create temporary path for visual feedback
+      tempPathRef.current = new fabric.Path(`M ${pointer.x} ${pointer.y}`, {
+        stroke: drawingSettings.color,
+        strokeWidth: drawingSettings.strokeWidth,
+        fill: '',
+        strokeLineCap: 'round',
+        strokeLineJoin: 'round',
+        selectable: false,
+      });
+      fabricCanvas.add(tempPathRef.current);
+    };
+
+    const handleMouseMove = (e) => {
+      if (!drawingMode || !isDrawingRef.current) return;
+      
+      const pointer = fabricCanvas.getPointer(e.e);
+      drawingPointsRef.current.push({ x: pointer.x, y: pointer.y });
+      
+      // Update temporary path
+      if (tempPathRef.current) {
+        fabricCanvas.remove(tempPathRef.current);
+        
+        let pathString = `M ${drawingPointsRef.current[0].x} ${drawingPointsRef.current[0].y}`;
+        for (let i = 1; i < drawingPointsRef.current.length; i++) {
+          pathString += ` L ${drawingPointsRef.current[i].x} ${drawingPointsRef.current[i].y}`;
+        }
+        
+        tempPathRef.current = new fabric.Path(pathString, {
+          stroke: drawingSettings.color,
+          strokeWidth: drawingSettings.strokeWidth,
+          fill: '',
+          strokeLineCap: 'round',
+          strokeLineJoin: 'round',
+          selectable: false,
+        });
+        fabricCanvas.add(tempPathRef.current);
+        fabricCanvas.renderAll();
+      }
+    };
+
+    const handleMouseUp = () => {
+      if (!drawingMode || !isDrawingRef.current) return;
+      
+      isDrawingRef.current = false;
+      
+      // Remove temporary path
+      if (tempPathRef.current) {
+        fabricCanvas.remove(tempPathRef.current);
+        tempPathRef.current = null;
+      }
+      
+      // Create final path object
+      if (drawingPointsRef.current.length > 2) {
+        const id = `path_${Date.now()}`;
+        const count = canvasObjects.filter(obj => obj.type === 'path').length + 1;
+        const name = `Drawing_${count}`;
+        
+        const pathObject = createPathFromPoints(
+          drawingPointsRef.current, 
+          id, 
+          drawingSettings
+        );
+        
+        if (pathObject) {
+          fabricCanvas.add(pathObject);
+          fabricCanvas.setActiveObject(pathObject);
+          fabricCanvas.renderAll();
+          
+          setCanvasObjects(prev => [...prev, { 
+            id, 
+            type: 'path', 
+            name,
+            pathData: pathObject.path,
+            strokeColor: drawingSettings.color,
+            strokeWidth: drawingSettings.strokeWidth,
+          }]);
+          setKeyframes(prev => ({ ...prev, [id]: [] }));
+        }
+      }
+      
+      drawingPointsRef.current = [];
+    };
+
+    // Handle ESC key to exit drawing mode
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && drawingMode) {
+        setDrawingMode(false);
+        
+        // Clean up any temporary path
+        if (tempPathRef.current) {
+          fabricCanvas.remove(tempPathRef.current);
+          tempPathRef.current = null;
+          fabricCanvas.renderAll();
+        }
+        
+        isDrawingRef.current = false;
+        drawingPointsRef.current = [];
+      }
+    };
+
+    if (drawingMode) {
+      // Disable object selection in drawing mode
+      fabricCanvas.selection = false;
+      fabricCanvas.forEachObject(obj => {
+        obj.selectable = false;
+        obj.evented = false; // ADDED: Disable all events on objects
+      });
+      
+      fabricCanvas.on('mouse:down', handleMouseDown);
+      fabricCanvas.on('mouse:move', handleMouseMove);
+      fabricCanvas.on('mouse:up', handleMouseUp);
+      window.addEventListener('keydown', handleKeyDown);
+    } else {
+      // UPDATED: Re-enable object selection more thoroughly
+      fabricCanvas.selection = true;
+      fabricCanvas.forEachObject(obj => {
+        obj.selectable = true;
+        obj.evented = true; // ADDED: Re-enable all events on objects
+      });
+      
+      fabricCanvas.off('mouse:down', handleMouseDown);
+      fabricCanvas.off('mouse:move', handleMouseMove);
+      fabricCanvas.off('mouse:up', handleMouseUp);
+      window.removeEventListener('keydown', handleKeyDown);
+      
+      // ADDED: Force a render to update selection state
+      fabricCanvas.renderAll();
+    }
+
+    return () => {
+      fabricCanvas.off('mouse:down', handleMouseDown);
+      fabricCanvas.off('mouse:move', handleMouseMove);
+      fabricCanvas.off('mouse:up', handleMouseUp);
+      window.removeEventListener('keydown', handleKeyDown);
+      
+      // ADDED: Ensure objects are selectable when unmounting
+      if (fabricCanvas) {
+        fabricCanvas.selection = true;
+        fabricCanvas.forEachObject(obj => {
+          obj.selectable = true;
+          obj.evented = true;
+        });
+      }
+    };
+  }, [fabricCanvas, drawingMode, drawingSettings, canvasObjects, setCanvasObjects, setKeyframes, setDrawingMode]);
+
   const updateProperties = (fabricObject) => {
     const props = extractPropertiesFromFabricObject(fabricObject);
     if (props) {
@@ -192,6 +361,47 @@ const Canvas = () => {
 
     fabricCanvas.renderAll();
   }, [currentTime, keyframes, canvasObjects, fabricCanvas, isInteracting, selectedObject, isPlaying]);
+
+  // Keyboard delete handler
+  useEffect(() => {
+    if (!fabricCanvas) return;
+
+    const handleKeyDown = (e) => {
+      // Don't delete if we're in drawing mode or editing text
+      if (drawingMode) return;
+      
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        const activeObjects = fabricCanvas.getActiveObjects();
+        
+        if (activeObjects.length > 0) {
+          e.preventDefault(); // Prevent browser back navigation
+          
+          activeObjects.forEach(fabricObject => {
+            if (fabricObject && fabricObject.id) {
+              fabricCanvas.remove(fabricObject);
+              
+              setCanvasObjects(prev => prev.filter(obj => obj.id !== fabricObject.id));
+              setKeyframes(prev => {
+                const updated = { ...prev };
+                delete updated[fabricObject.id];
+                return updated;
+              });
+            }
+          });
+
+          fabricCanvas.discardActiveObject();
+          fabricCanvas.renderAll();
+          setSelectedObject(null);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [fabricCanvas, drawingMode, setCanvasObjects, setKeyframes, setSelectedObject]);
 
   return (
     <Box sx={{ mb: 2, display: 'flex', justifyContent: 'center' }}>

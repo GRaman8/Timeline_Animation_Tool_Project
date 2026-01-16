@@ -15,6 +15,9 @@ import {
   selectedKeyframeState,
   snapToKeyframesState,
   hasActiveSelectionState,
+  drawingModeState,
+  currentDrawingPathState,
+  drawingToolSettingsState,
 } from './atoms';
 
 import {
@@ -91,4 +94,16 @@ export const useSnapToKeyframes = () => {
 
 export const useHasActiveSelection = () => {
   return useRecoilState(hasActiveSelectionState);
+};
+
+export const useDrawingMode = () => {
+  return useRecoilState(drawingModeState);
+};
+
+export const useCurrentDrawingPath = () => {
+  return useRecoilState(currentDrawingPathState);
+};
+
+export const useDrawingToolSettings = () => {
+  return useRecoilState(drawingToolSettingsState);
 };

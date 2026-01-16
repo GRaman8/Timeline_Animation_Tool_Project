@@ -2,6 +2,27 @@
  * Generate HTML, CSS, and JavaScript code from animation data
  */
 
+/**
+ * Convert Fabric.js path array to SVG path string
+ */
+const fabricPathToSVGPath = (pathArray) => {
+  if (!pathArray || !Array.isArray(pathArray)) return '';
+  
+  let pathString = '';
+  
+  pathArray.forEach(segment => {
+    if (!Array.isArray(segment)) return;
+    
+    const command = segment[0];
+    const coords = segment.slice(1);
+    
+    pathString += command + ' ';
+    pathString += coords.join(' ') + ' ';
+  });
+  
+  return pathString.trim();
+};
+
 export const generateAnimationCode = (canvasObjects, keyframes, duration) => {
   const html = generateHTML();
   const css = generateCSS(canvasObjects, keyframes);
@@ -35,6 +56,7 @@ const generateHTML = () => {
 /**
  * Generate CSS styles
  */
+
 const generateCSS = (canvasObjects, keyframes) => {
   let css = `/* Generated Animation Styles */
 
@@ -47,17 +69,16 @@ body {
 
 #animation-container {
     position: relative;
-    width: 1200px;  /* Matches editor canvas width */
-    height: 600px;  /* Matches editor canvas height */
+    width: 1600px;
+    height: 800px;
     background-color: #f0f0f0;
     margin: 20px auto;
     border: 1px solid #ccc;
+    overflow: hidden;
 }
 
 `;
 
-  // ... rest of function
-  // Generate styles for each object
   canvasObjects.forEach(obj => {
     const objKeyframes = keyframes[obj.id] || [];
     if (objKeyframes.length === 0) return;
@@ -73,7 +94,6 @@ body {
     opacity: ${props.opacity};
 `;
 
-    // Add type-specific styles
     if (obj.type === 'rectangle') {
       css += `    width: 100px;
     height: 100px;
@@ -88,6 +108,11 @@ body {
     } else if (obj.type === 'text') {
       css += `    font-size: 24px;
     color: #000000;
+    white-space: nowrap;
+`;
+    } else if (obj.type === 'path') {
+      // Path objects are SVG - no specific CSS needed beyond positioning
+      css += `    /* SVG Path Element */
 `;
     }
 
@@ -96,7 +121,6 @@ body {
 `;
   });
 
-  // Add fallback class
   css += `.default-animation-object {
     width: 50px;
     height: 50px;
@@ -111,6 +135,7 @@ body {
 /**
  * Generate GSAP JavaScript animation code
  */
+
 const generateJavaScript = (canvasObjects, keyframes, duration) => {
   let js = `// Generated Animation Code
 // Using GSAP (GreenSock Animation Platform)
@@ -131,20 +156,49 @@ document.addEventListener('DOMContentLoaded', () => {
     const objKeyframes = keyframes[obj.id] || [];
     if (objKeyframes.length === 0) return;
 
-    js += `// Create ${obj.name}
+    if (obj.type === 'path') {
+      // UPDATED: Create SVG element for paths
+      const pathString = fabricPathToSVGPath(obj.pathData);
+      const strokeColor = obj.strokeColor || '#000000';
+      const strokeWidth = obj.strokeWidth || 3;
+      
+      js += `    // Create ${obj.name} (SVG Path)
+    const ${obj.id} = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    ${obj.id}.id = '${obj.id}';
+    ${obj.id}.style.position = 'absolute';
+    ${obj.id}.style.overflow = 'visible';
+    ${obj.id}.style.pointerEvents = 'none';
+    ${obj.id}.setAttribute('width', '1600');
+    ${obj.id}.setAttribute('height', '800');
+    
+    const path_${obj.id} = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path_${obj.id}.setAttribute('d', '${pathString}');
+    path_${obj.id}.setAttribute('stroke', '${strokeColor}');
+    path_${obj.id}.setAttribute('stroke-width', '${strokeWidth}');
+    path_${obj.id}.setAttribute('fill', 'none');
+    path_${obj.id}.setAttribute('stroke-linecap', 'round');
+    path_${obj.id}.setAttribute('stroke-linejoin', 'round');
+    
+    ${obj.id}.appendChild(path_${obj.id});
+    container.appendChild(${obj.id});
+    
+`;
+    } else {
+      // Regular elements
+      js += `    // Create ${obj.name}
     const ${obj.id} = document.createElement('div');
-    ${obj.id}.id = '${obj.id}';`;
+    ${obj.id}.id = '${obj.id}';
+`;
 
-    // Add text content for text elements
-    if (obj.type === 'text') {
-      // Get the actual text from the first keyframe or use default
-      const firstKf = objKeyframes[0];
-      // The text content should be stored in the fabricObject
-      // We need to pass this through from the canvas
-      js += `${obj.id}.textContent = '${obj.textContent || 'Text'}';` ;
+      if (obj.type === 'text') {
+        js += `    ${obj.id}.textContent = '${obj.textContent || 'Text'}';
+`;
+      }
+
+      js += `    container.appendChild(${obj.id});
+    
+`;
     }
-
-    js += `container.appendChild(${obj.id});`;
   });
 
   // Add animations
