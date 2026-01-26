@@ -14,6 +14,8 @@ import {
   useDrawingMode,
   useCurrentDrawingPath,
   useDrawingToolSettings,
+  useActiveColorIndex, 
+  useColorPalette, 
 } from '../../store/hooks';
 
 import { 
@@ -28,6 +30,7 @@ import {
   applyPropertiesToFabricObject 
 } from '../../utils/interpolation';
 
+
 const Canvas = () => {
   const canvasRef = useRef(null);
   const [selectedObject, setSelectedObject] = useSelectedObject();
@@ -40,7 +43,10 @@ const Canvas = () => {
   const [, setHasActiveSelection] = useHasActiveSelection();
   const [drawingMode, setDrawingMode] = useDrawingMode();
   const [currentDrawingPath, setCurrentDrawingPath] = useCurrentDrawingPath();
-  const [drawingSettings] = useDrawingToolSettings();
+  const [drawingSettings, setDrawingSettings] = useDrawingToolSettings();
+
+  const [activeColorIndex, setActiveColorIndex] = useActiveColorIndex();
+  const [colorPalette] = useColorPalette();
   
   // Track if user is currently interacting with an object
   const [isInteracting, setIsInteracting] = useState(false);
@@ -50,6 +56,14 @@ const Canvas = () => {
   const isDrawingRef = useRef(false);
   const drawingPointsRef = useRef([]);
   const tempPathRef = useRef(null);
+  const pathSegmentsRef = useRef([]);
+
+  const updateProperties = (fabricObject) => {
+    const props = extractPropertiesFromFabricObject(fabricObject);
+    if (props) {
+      setSelectedObjectProperties(props);
+    }
+  };
 
   // Initialize Fabric.js canvas
   useEffect(() => {
@@ -165,21 +179,25 @@ const Canvas = () => {
     };
   }, []);
 
-  // Drawing mode handler
+  // Enhanced Drawing, Path, and Edit Mode Handler
   useEffect(() => {
     if (!fabricCanvas) return;
 
-    const handleMouseDown = (e) => {
+    // ===== DRAWING MODE HANDLERS =====
+    const handleDrawingMouseDown = (e) => {
       if (!drawingMode) return;
       
       const pointer = fabricCanvas.getPointer(e.e);
+      
       isDrawingRef.current = true;
       drawingPointsRef.current = [{ x: pointer.x, y: pointer.y }];
+      pathSegmentsRef.current = [];
+
+      const strokeWidth = drawingSettings.strokeWidth;
       
-      // Create temporary path for visual feedback
       tempPathRef.current = new fabric.Path(`M ${pointer.x} ${pointer.y}`, {
         stroke: drawingSettings.color,
-        strokeWidth: drawingSettings.strokeWidth,
+        strokeWidth: strokeWidth,
         fill: '',
         strokeLineCap: 'round',
         strokeLineJoin: 'round',
@@ -188,13 +206,13 @@ const Canvas = () => {
       fabricCanvas.add(tempPathRef.current);
     };
 
-    const handleMouseMove = (e) => {
+    const handleDrawingMouseMove = (e) => {
       if (!drawingMode || !isDrawingRef.current) return;
       
       const pointer = fabricCanvas.getPointer(e.e);
+      
       drawingPointsRef.current.push({ x: pointer.x, y: pointer.y });
       
-      // Update temporary path
       if (tempPathRef.current) {
         fabricCanvas.remove(tempPathRef.current);
         
@@ -203,9 +221,11 @@ const Canvas = () => {
           pathString += ` L ${drawingPointsRef.current[i].x} ${drawingPointsRef.current[i].y}`;
         }
         
+        const strokeWidth = drawingSettings.strokeWidth;
+        
         tempPathRef.current = new fabric.Path(pathString, {
           stroke: drawingSettings.color,
-          strokeWidth: drawingSettings.strokeWidth,
+          strokeWidth: strokeWidth,
           fill: '',
           strokeLineCap: 'round',
           strokeLineJoin: 'round',
@@ -216,118 +236,221 @@ const Canvas = () => {
       }
     };
 
-    const handleMouseUp = () => {
+    const handleDrawingMouseUp = () => {
       if (!drawingMode || !isDrawingRef.current) return;
       
       isDrawingRef.current = false;
       
-      // Remove temporary path
       if (tempPathRef.current) {
         fabricCanvas.remove(tempPathRef.current);
         tempPathRef.current = null;
       }
       
-      // Create final path object
       if (drawingPointsRef.current.length > 2) {
-        const id = `path_${Date.now()}`;
-        const count = canvasObjects.filter(obj => obj.type === 'path').length + 1;
-        const name = `Drawing_${count}`;
+        // Check for shape recognition
+        let createdObject = null;
         
-        const pathObject = createPathFromPoints(
-          drawingPointsRef.current, 
-          id, 
-          drawingSettings
-        );
-        
-        if (pathObject) {
-          fabricCanvas.add(pathObject);
-          fabricCanvas.setActiveObject(pathObject);
-          fabricCanvas.renderAll();
+        // if (shapeRecognitionEnabled) {
+        //   const recognizedShape = recognizeShape(drawingPointsRef.current);
           
-          setCanvasObjects(prev => [...prev, { 
+        //   if (recognizedShape) {
+        //     const shapeInfo = createShapeFromRecognition(recognizedShape, null, drawingSettings);
+            
+        //     if (shapeInfo) {
+        //       const id = `${shapeInfo.type}_${Date.now()}`;
+        //       const count = canvasObjects.filter(obj => obj.type === shapeInfo.type).length + 1;
+        //       const name = `${shapeInfo.type}_${count}`;
+              
+        //       // Create appropriate Fabric object
+        //       let fabricObject;
+        //       switch (shapeInfo.type) {
+        //         case 'circle':
+        //           fabricObject = new fabric.Circle({ id, ...shapeInfo.data });
+        //           break;
+        //         case 'rectangle':
+        //           fabricObject = new fabric.Rect({ id, ...shapeInfo.data });
+        //           break;
+        //         case 'line':
+        //           fabricObject = new fabric.Line(
+        //             [shapeInfo.data.x1, shapeInfo.data.y1, shapeInfo.data.x2, shapeInfo.data.y2],
+        //             { id, stroke: shapeInfo.data.stroke, strokeWidth: shapeInfo.data.strokeWidth }
+        //           );
+        //           break;
+        //         case 'polygon':
+        //           fabricObject = new fabric.Polygon(
+        //             shapeInfo.data.points.reduce((acc, val, i) => {
+        //               if (i % 2 === 0) acc.push({ x: val, y: shapeInfo.data.points[i + 1] });
+        //               return acc;
+        //             }, []),
+        //             { id, ...shapeInfo.data }
+        //           );
+        //           break;
+        //       }
+              
+        //       if (fabricObject) {
+        //         fabricCanvas.add(fabricObject);
+        //         fabricCanvas.setActiveObject(fabricObject);
+        //         fabricCanvas.renderAll();
+                
+        //         setCanvasObjects(prev => [...prev, { 
+        //           id, 
+        //           type: shapeInfo.type, 
+        //           name,
+        //         }]);
+        //         setKeyframes(prev => ({ ...prev, [id]: [] }));
+                
+        //         createdObject = fabricObject;
+        //       }
+        //     }
+        //   }
+        // }
+        
+        // If no shape recognized, create path
+        if (!createdObject) {
+          const id = `path_${Date.now()}`;
+          const count = canvasObjects.filter(obj => obj.type === 'path').length + 1;
+          const name = `Drawing_${count}`;
+          
+          const pathObject = createPathFromPoints(
+            drawingPointsRef.current, 
             id, 
-            type: 'path', 
-            name,
-            pathData: pathObject.path,
-            strokeColor: drawingSettings.color,
-            strokeWidth: drawingSettings.strokeWidth,
-          }]);
-          setKeyframes(prev => ({ ...prev, [id]: [] }));
+            drawingSettings
+          );
+          
+          if (pathObject) {
+            fabricCanvas.add(pathObject);
+            fabricCanvas.setActiveObject(pathObject);
+            fabricCanvas.renderAll();
+            
+            setCanvasObjects(prev => [...prev, { 
+              id, 
+              type: 'path', 
+              name,
+              pathData: pathObject.path,
+              strokeColor: drawingSettings.color,
+              strokeWidth: drawingSettings.strokeWidth,
+            }]);
+            setKeyframes(prev => ({ ...prev, [id]: [] }));
+          }
         }
       }
       
       drawingPointsRef.current = [];
+      pathSegmentsRef.current = [];
     };
+  
 
-    // Handle ESC key to exit drawing mode
+    // ===== KEYBOARD HANDLERS =====
     const handleKeyDown = (e) => {
-      if (e.key === 'Escape' && drawingMode) {
-        setDrawingMode(false);
-        
-        // Clean up any temporary path
-        if (tempPathRef.current) {
-          fabricCanvas.remove(tempPathRef.current);
-          tempPathRef.current = null;
-          fabricCanvas.renderAll();
+      if (e.key === 'Escape') {
+        if (drawingMode) {
+          setDrawingMode(false);
+          if (tempPathRef.current) {
+            fabricCanvas.remove(tempPathRef.current);
+            tempPathRef.current = null;
+            fabricCanvas.renderAll();
+          }
+          isDrawingRef.current = false;
+          drawingPointsRef.current = [];
         }
         
-        isDrawingRef.current = false;
-        drawingPointsRef.current = [];
+        
+        // if (pathEditMode) {
+        //   setPathEditMode(false);
+        //   // Remove control points
+        //   const controls = fabricCanvas.getObjects().filter(obj => 
+        //     obj.name === 'pathControl'
+        //   );
+        //   controls.forEach(ctrl => fabricCanvas.remove(ctrl));
+        //   fabricCanvas.renderAll();
+        // }
+      }
+      
+      // Number keys to switch colors quickly
+      if (drawingMode && e.key >= '1' && e.key <= '9') {
+        const index = parseInt(e.key) - 1;
+        if (index < colorPalette.length) {
+          setActiveColorIndex(index);
+          setDrawingSettings(prev => ({ 
+            ...prev, 
+            color: colorPalette[index] 
+          }));
+        }
       }
     };
 
+    // ===== ATTACH EVENT LISTENERS =====
+    
     if (drawingMode) {
-      // Disable object selection in drawing mode
       fabricCanvas.selection = false;
       fabricCanvas.forEachObject(obj => {
         obj.selectable = false;
-        obj.evented = false; // ADDED: Disable all events on objects
+        obj.evented = false;
       });
       
-      fabricCanvas.on('mouse:down', handleMouseDown);
-      fabricCanvas.on('mouse:move', handleMouseMove);
-      fabricCanvas.on('mouse:up', handleMouseUp);
+      fabricCanvas.on('mouse:down', handleDrawingMouseDown);
+      fabricCanvas.on('mouse:move', handleDrawingMouseMove);
+      fabricCanvas.on('mouse:up', handleDrawingMouseUp);
       window.addEventListener('keydown', handleKeyDown);
     } else {
-      // UPDATED: Re-enable object selection more thoroughly
+      // NORMAL MODE
       fabricCanvas.selection = true;
+      fabricCanvas.defaultCursor = 'default';
+      
+      
       fabricCanvas.forEachObject(obj => {
-        obj.selectable = true;
-        obj.evented = true; // ADDED: Re-enable all events on objects
+        if (!obj.isControlPoint) {
+          obj.selectable = true;
+          obj.evented = true;
+        }
       });
       
-      fabricCanvas.off('mouse:down', handleMouseDown);
-      fabricCanvas.off('mouse:move', handleMouseMove);
-      fabricCanvas.off('mouse:up', handleMouseUp);
-      window.removeEventListener('keydown', handleKeyDown);
+      fabricCanvas.off('mouse:down', handleDrawingMouseDown);
+      fabricCanvas.off('mouse:move', handleDrawingMouseMove);
+      fabricCanvas.off('mouse:up', handleDrawingMouseUp);
+      // fabricCanvas.off('mouse:down', handlePathEditClick);
+      // fabricCanvas.off('object:modified', handleControlPointModified);
+      // window.removeEventListener('keydown', handlePathEditKeyDown);
       
-      // ADDED: Force a render to update selection state
       fabricCanvas.renderAll();
     }
 
     return () => {
-      fabricCanvas.off('mouse:down', handleMouseDown);
-      fabricCanvas.off('mouse:move', handleMouseMove);
-      fabricCanvas.off('mouse:up', handleMouseUp);
-      window.removeEventListener('keydown', handleKeyDown);
+      // Cleanup
+      fabricCanvas.off('mouse:down', handleDrawingMouseDown);
+      fabricCanvas.off('mouse:move', handleDrawingMouseMove);
+      fabricCanvas.off('mouse:up', handleDrawingMouseUp);
+      // fabricCanvas.off('mouse:down', handlePathEditClick);
+      // fabricCanvas.off('object:modified', handleControlPointModified);
+      // window.removeEventListener('keydown', handlePathEditKeyDown);
       
-      // ADDED: Ensure objects are selectable when unmounting
       if (fabricCanvas) {
         fabricCanvas.selection = true;
-        fabricCanvas.forEachObject(obj => {
-          obj.selectable = true;
-          obj.evented = true;
-        });
+        fabricCanvas.defaultCursor = 'default';
+        
+        // // Clean up control points
+        // if (pathEditStateRef.current.controlPoints.length > 0) {
+        //   pathEditStateRef.current.controlPoints.forEach(ctrl => {
+        //     try {
+        //       fabricCanvas.remove(ctrl);
+        //     } catch (e) {}
+        //   });
+        //   pathEditStateRef.current.controlPoints = [];
+        // }
       }
     };
-  }, [fabricCanvas, drawingMode, drawingSettings, canvasObjects, setCanvasObjects, setKeyframes, setDrawingMode]);
+  }, [
+    fabricCanvas, 
+    drawingMode, 
+    drawingSettings, 
+    canvasObjects, 
+    setCanvasObjects, 
+    setKeyframes,
+    colorPalette,
+    activeColorIndex,
+  ]);
 
-  const updateProperties = (fabricObject) => {
-    const props = extractPropertiesFromFabricObject(fabricObject);
-    if (props) {
-      setSelectedObjectProperties(props);
-    }
-  };
+  
 
   // Update canvas when time changes
   useEffect(() => {

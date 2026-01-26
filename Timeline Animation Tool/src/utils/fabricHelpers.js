@@ -86,16 +86,22 @@ export const createPathFromPoints = (points, id, settings) => {
 export const extractPropertiesFromFabricObject = (fabricObject) => {
   if (!fabricObject) return null;
 
+  // Calculate center position
+  const centerX = fabricObject.left + (fabricObject.width * fabricObject.scaleX) / 2;
+  const centerY = fabricObject.top + (fabricObject.height * fabricObject.scaleY) / 2;
+
   const baseProps = {
     x: fabricObject.left || 0,
     y: fabricObject.top || 0,
+    centerX: centerX,
+    centerY: centerY,
     scaleX: fabricObject.scaleX || 1,
     scaleY: fabricObject.scaleY || 1,
     rotation: fabricObject.angle || 0,
     opacity: fabricObject.opacity !== undefined ? fabricObject.opacity : 1,
   };
 
-  // ADD: Include path-specific data for path objects
+  // Include path-specific data for path objects
   if (fabricObject.type === 'path') {
     return {
       ...baseProps,

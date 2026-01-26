@@ -18,6 +18,8 @@ import {
   drawingModeState,
   currentDrawingPathState,
   drawingToolSettingsState,
+  colorPaletteState,
+  activeColorIndexState,
 } from './atoms';
 
 import {
@@ -106,4 +108,12 @@ export const useCurrentDrawingPath = () => {
 
 export const useDrawingToolSettings = () => {
   return useRecoilState(drawingToolSettingsState);
+};
+
+export const useColorPalette = () => {
+  return useRecoilState(colorPaletteState);
+};
+
+export const useActiveColorIndex = () => {
+  return useRecoilState(activeColorIndexState);
 };

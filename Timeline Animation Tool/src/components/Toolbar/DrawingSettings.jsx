@@ -8,15 +8,36 @@ import {
   FormControlLabel,
   Checkbox,
   Divider,
+  IconButton,
+  Grid,
+  Chip,
 } from '@mui/material';
-import { Brush } from '@mui/icons-material';
-import { useDrawingToolSettings } from '../../store/hooks';
+import { 
+  Brush, 
+  Add as AddIcon,
+  Settings as SettingsIcon 
+} from '@mui/icons-material';
+import { 
+  useDrawingToolSettings,
+  useColorPalette,
+  useActiveColorIndex,
+} from '../../store/hooks';
 
 const DrawingSettings = () => {
   const [settings, setSettings] = useDrawingToolSettings();
+  const [colorPalette, setColorPalette] = useColorPalette();
+  const [activeColorIndex, setActiveColorIndex] = useActiveColorIndex();
 
   const handleColorChange = (e) => {
-    setSettings(prev => ({ ...prev, color: e.target.value }));
+    const newColor = e.target.value;
+    setSettings(prev => ({ ...prev, color: newColor }));
+    
+    // Update the color in the palette at active index
+    setColorPalette(prev => {
+      const updated = [...prev];
+      updated[activeColorIndex] = newColor;
+      return updated;
+    });
   };
 
   const handleStrokeWidthChange = (e, newValue) => {
@@ -25,6 +46,16 @@ const DrawingSettings = () => {
 
   const handleSmoothingChange = (e) => {
     setSettings(prev => ({ ...prev, smoothing: e.target.checked }));
+  };
+
+  const handleAddColor = () => {
+    const newColor = '#' + Math.floor(Math.random()*16777215).toString(16);
+    setColorPalette(prev => [...prev, newColor]);
+  };
+
+  const handleSelectColor = (index) => {
+    setActiveColorIndex(index);
+    setSettings(prev => ({ ...prev, color: colorPalette[index] }));
   };
 
   return (
@@ -37,9 +68,44 @@ const DrawingSettings = () => {
       </Box>
 
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+        {/* Color Palette */}
+        <Box>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+            <Typography variant="body2">
+              Color Palette
+            </Typography>
+            <IconButton size="small" onClick={handleAddColor}>
+              <AddIcon fontSize="small" />
+            </IconButton>
+          </Box>
+          <Grid container spacing={0.5}>
+            {colorPalette.map((color, index) => (
+              <Grid item key={index}>
+                <Box
+                  onClick={() => handleSelectColor(index)}
+                  sx={{
+                    width: 30,
+                    height: 30,
+                    bgcolor: color,
+                    border: activeColorIndex === index ? '3px solid' : '1px solid',
+                    borderColor: activeColorIndex === index ? 'primary.main' : 'divider',
+                    borderRadius: 1,
+                    cursor: 'pointer',
+                    transition: 'all 0.2s',
+                    '&:hover': {
+                      transform: 'scale(1.1)',
+                    }
+                  }}
+                />
+              </Grid>
+            ))}
+          </Grid>
+        </Box>
+
+        {/* Current Color */}
         <Box>
           <Typography variant="body2" gutterBottom>
-            Color
+            Current Color
           </Typography>
           <TextField
             type="color"
@@ -50,6 +116,7 @@ const DrawingSettings = () => {
           />
         </Box>
 
+        {/* Stroke Width */}
         <Box>
           <Typography variant="body2" gutterBottom>
             Stroke Width: {settings.strokeWidth}px
@@ -64,6 +131,9 @@ const DrawingSettings = () => {
           />
         </Box>
 
+        {/* Advanced Options */}
+        <Divider />
+        
         <FormControlLabel
           control={
             <Checkbox
@@ -73,13 +143,31 @@ const DrawingSettings = () => {
           }
           label="Smooth curves"
         />
+
+        {/* <FormControlLabel
+          control={
+            <Checkbox
+              checked={shapeRecognition}
+              onChange={(e) => setShapeRecognition(e.target.checked)}
+            />
+          }
+          label="Shape recognition"
+        /> */}
       </Box>
 
       <Divider sx={{ my: 2 }} />
 
-      <Typography variant="body2" color="text.secondary">
-        💡 Click the brush icon in the toolbar to enter drawing mode. 
-        Draw on the canvas, then press ESC or click the brush again to exit.
+      <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+        <Chip 
+          icon={<Brush />} 
+          label="Draw Mode" 
+          color="primary" 
+          size="small"
+        />
+      </Box>
+
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
+        💡 Click colors to switch while drawing. 
       </Typography>
     </Paper>
   );
