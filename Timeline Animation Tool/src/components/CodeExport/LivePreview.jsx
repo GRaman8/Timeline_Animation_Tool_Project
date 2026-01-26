@@ -103,7 +103,6 @@ const LivePreview = () => {
 
       // Set initial position
       const firstKf = objKeyframes[0];
-
       gsap.set(el, {
         x: firstKf.properties.x,
         y: firstKf.properties.y,
@@ -111,7 +110,6 @@ const LivePreview = () => {
         scaleY: firstKf.properties.scaleY,
         rotation: firstKf.properties.rotation,
         opacity: firstKf.properties.opacity,
-        transformOrigin: '50% 50%', // ADD THIS - ensures rotation/scale from center
       });
 
       // Add animations

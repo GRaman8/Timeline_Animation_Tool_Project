@@ -145,7 +145,7 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Create timeline
     const tl = gsap.timeline({ 
-        repeat: -1,
+        repeat: 0,
         defaults: { duration: 1, ease: "power1.inOut" }
     });
     
@@ -157,6 +157,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (objKeyframes.length === 0) return;
 
     if (obj.type === 'path') {
+      // UPDATED: Create SVG element for paths
       const pathString = fabricPathToSVGPath(obj.pathData);
       const strokeColor = obj.strokeColor || '#000000';
       const strokeWidth = obj.strokeWidth || 3;
@@ -183,10 +184,10 @@ document.addEventListener('DOMContentLoaded', () => {
     
 `;
     } else {
+      // Regular elements
       js += `    // Create ${obj.name}
     const ${obj.id} = document.createElement('div');
     ${obj.id}.id = '${obj.id}';
-    ${obj.id}.style.transformOrigin = 'center center'; // ADD THIS
 `;
 
       if (obj.type === 'text') {
@@ -200,26 +201,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
- // Add animations
+  // Add animations
   canvasObjects.forEach(obj => {
     const objKeyframes = keyframes[obj.id] || [];
     if (objKeyframes.length < 2) return;
 
     js += `    // Animate ${obj.name}
-`;
-
-    // Set initial state first
-    const firstKf = objKeyframes[0];
-    js += `    gsap.set('#${obj.id}', {
-        x: ${firstKf.properties.x.toFixed(2)},
-        y: ${firstKf.properties.y.toFixed(2)},
-        scaleX: ${firstKf.properties.scaleX.toFixed(2)},
-        scaleY: ${firstKf.properties.scaleY.toFixed(2)},
-        rotation: ${firstKf.properties.rotation.toFixed(2)},
-        opacity: ${firstKf.properties.opacity.toFixed(2)},
-        transformOrigin: 'center center'
-    });
-    
 `;
 
     for (let i = 1; i < objKeyframes.length; i++) {

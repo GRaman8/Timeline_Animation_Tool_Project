@@ -118,15 +118,3 @@ export const drawingToolSettingsState = atom({
     smoothing: true,
   },
 });
-
-// Color palette for multi-color drawing
-export const colorPaletteState = atom({
-  key: 'colorPaletteState',
-  default: ['#000000', '#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#FF00FF', '#00FFFF'],
-});
-
-// Current active color index
-export const activeColorIndexState = atom({
-  key: 'activeColorIndexState',
-  default: 0,
-});

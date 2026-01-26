@@ -34,9 +34,8 @@ const Toolbar = () => {
   const [fabricCanvas] = useFabricCanvas();
   const [canvasObjects, setCanvasObjects] = useCanvasObjects();
   const [keyframes, setKeyframes] = useKeyframes();
-  const [hasActiveSelection] = useHasActiveSelection();
+  const [hasActiveSelection] = useHasActiveSelection(); // ADD THIS
   const [drawingMode, setDrawingMode] = useDrawingMode();
-
 
   const addElement = (type) => {
     if (!fabricCanvas) return;
@@ -130,7 +129,6 @@ const Toolbar = () => {
       setSelectedObject(null);
     }
   };
-
 
   return (
     <Paper 
