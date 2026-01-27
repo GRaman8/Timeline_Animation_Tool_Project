@@ -28,6 +28,10 @@ import {
   applyPropertiesToFabricObject 
 } from '../../utils/interpolation';
 
+// FIXED: Use consistent canvas dimensions across all views
+export const CANVAS_WIDTH = 1200;
+export const CANVAS_HEIGHT = 600;
+
 const Canvas = () => {
   const canvasRef = useRef(null);
   const [selectedObject, setSelectedObject] = useSelectedObject();
@@ -42,11 +46,9 @@ const Canvas = () => {
   const [currentDrawingPath, setCurrentDrawingPath] = useCurrentDrawingPath();
   const [drawingSettings] = useDrawingToolSettings();
   
-  // Track if user is currently interacting with an object
   const [isInteracting, setIsInteracting] = useState(false);
   const interactingObjectRef = useRef(null);
 
-  //For Drawing
   const isDrawingRef = useRef(false);
   const drawingPointsRef = useRef([]);
   const tempPathRef = useRef(null);
@@ -56,8 +58,8 @@ const Canvas = () => {
     if (!canvasRef.current) return;
 
     const canvas = new fabric.Canvas(canvasRef.current, {
-      width: 1200,
-      height: 600,
+      width: CANVAS_WIDTH,
+      height: CANVAS_HEIGHT,
       backgroundColor: '#f0f0f0',
       selection: true,
       selectionColor: 'rgba(100, 100, 255, 0.3)',
@@ -67,9 +69,8 @@ const Canvas = () => {
 
     setFabricCanvas(canvas);
 
-    // Selection event handlers
     canvas.on('selection:created', (e) => {
-      setHasActiveSelection(true); // UPDATE SELECTION STATE
+      setHasActiveSelection(true);
       
       if (e.selected) {
         if (e.selected.length === 1) {
@@ -84,7 +85,7 @@ const Canvas = () => {
     });
 
     canvas.on('selection:updated', (e) => {
-      setHasActiveSelection(true); // UPDATE SELECTION STATE
+      setHasActiveSelection(true);
       
       if (e.selected) {
         if (e.selected.length === 1) {
@@ -99,18 +100,36 @@ const Canvas = () => {
     });
 
     canvas.on('selection:cleared', () => {
-      setHasActiveSelection(false); // UPDATE SELECTION STATE
+      setHasActiveSelection(false);
       setSelectedObject(null);
     });
 
     canvas.on('object:modified', (e) => {
       if (e.target) {
         updateProperties(e.target);
+        
+        // Update the canvas object's stored data
+        if (e.target.type === 'path') {
+          setCanvasObjects(prev => prev.map(obj => 
+            obj.id === e.target.id 
+              ? { 
+                  ...obj, 
+                  pathData: e.target.path,
+                  strokeColor: e.target.stroke,
+                  strokeWidth: e.target.strokeWidth,
+                  boundingBox: {
+                    width: e.target.width,
+                    height: e.target.height
+                  }
+                }
+              : obj
+          ));
+        }
+        
         canvas.renderAll();
       }
     });
 
-    // Track when user starts interacting
     canvas.on('mouse:down', (e) => {
       if (e.target) {
         setIsInteracting(true);
@@ -118,13 +137,11 @@ const Canvas = () => {
       }
     });
 
-    // Track when user stops interacting
     canvas.on('mouse:up', () => {
       setIsInteracting(false);
       interactingObjectRef.current = null;
     });
 
-    // Real-time updates during interaction
     canvas.on('object:moving', (e) => {
       if (e.target) {
         updateProperties(e.target);
@@ -143,7 +160,6 @@ const Canvas = () => {
       }
     });
 
-    // Text editing handler
     canvas.on('mouse:dblclick', (e) => {
       if (e.target && e.target.type === 'text') {
         const newText = prompt('Enter new text:', e.target.text);
@@ -176,7 +192,6 @@ const Canvas = () => {
       isDrawingRef.current = true;
       drawingPointsRef.current = [{ x: pointer.x, y: pointer.y }];
       
-      // Create temporary path for visual feedback
       tempPathRef.current = new fabric.Path(`M ${pointer.x} ${pointer.y}`, {
         stroke: drawingSettings.color,
         strokeWidth: drawingSettings.strokeWidth,
@@ -194,7 +209,6 @@ const Canvas = () => {
       const pointer = fabricCanvas.getPointer(e.e);
       drawingPointsRef.current.push({ x: pointer.x, y: pointer.y });
       
-      // Update temporary path
       if (tempPathRef.current) {
         fabricCanvas.remove(tempPathRef.current);
         
@@ -221,13 +235,11 @@ const Canvas = () => {
       
       isDrawingRef.current = false;
       
-      // Remove temporary path
       if (tempPathRef.current) {
         fabricCanvas.remove(tempPathRef.current);
         tempPathRef.current = null;
       }
       
-      // Create final path object
       if (drawingPointsRef.current.length > 2) {
         const id = `path_${Date.now()}`;
         const count = canvasObjects.filter(obj => obj.type === 'path').length + 1;
@@ -251,6 +263,10 @@ const Canvas = () => {
             pathData: pathObject.path,
             strokeColor: drawingSettings.color,
             strokeWidth: drawingSettings.strokeWidth,
+            boundingBox: {
+              width: pathObject.width,
+              height: pathObject.height
+            }
           }]);
           setKeyframes(prev => ({ ...prev, [id]: [] }));
         }
@@ -259,12 +275,10 @@ const Canvas = () => {
       drawingPointsRef.current = [];
     };
 
-    // Handle ESC key to exit drawing mode
     const handleKeyDown = (e) => {
       if (e.key === 'Escape' && drawingMode) {
         setDrawingMode(false);
         
-        // Clean up any temporary path
         if (tempPathRef.current) {
           fabricCanvas.remove(tempPathRef.current);
           tempPathRef.current = null;
@@ -277,11 +291,10 @@ const Canvas = () => {
     };
 
     if (drawingMode) {
-      // Disable object selection in drawing mode
       fabricCanvas.selection = false;
       fabricCanvas.forEachObject(obj => {
         obj.selectable = false;
-        obj.evented = false; // ADDED: Disable all events on objects
+        obj.evented = false;
       });
       
       fabricCanvas.on('mouse:down', handleMouseDown);
@@ -289,11 +302,10 @@ const Canvas = () => {
       fabricCanvas.on('mouse:up', handleMouseUp);
       window.addEventListener('keydown', handleKeyDown);
     } else {
-      // UPDATED: Re-enable object selection more thoroughly
       fabricCanvas.selection = true;
       fabricCanvas.forEachObject(obj => {
         obj.selectable = true;
-        obj.evented = true; // ADDED: Re-enable all events on objects
+        obj.evented = true;
       });
       
       fabricCanvas.off('mouse:down', handleMouseDown);
@@ -301,7 +313,6 @@ const Canvas = () => {
       fabricCanvas.off('mouse:up', handleMouseUp);
       window.removeEventListener('keydown', handleKeyDown);
       
-      // ADDED: Force a render to update selection state
       fabricCanvas.renderAll();
     }
 
@@ -311,7 +322,6 @@ const Canvas = () => {
       fabricCanvas.off('mouse:up', handleMouseUp);
       window.removeEventListener('keydown', handleKeyDown);
       
-      // ADDED: Ensure objects are selectable when unmounting
       if (fabricCanvas) {
         fabricCanvas.selection = true;
         fabricCanvas.forEachObject(obj => {
@@ -329,10 +339,19 @@ const Canvas = () => {
     }
   };
 
-  // Update canvas when time changes
+  // Update canvas when time changes OR when selected object changes
   useEffect(() => {
     if (!fabricCanvas) return;
     if (isInteracting) return;
+
+    // If there's a selected object, make sure it's active in the canvas
+    if (selectedObject && !isPlaying) {
+      const fabricObject = findFabricObjectById(fabricCanvas, selectedObject);
+      if (fabricObject && fabricCanvas.getActiveObject() !== fabricObject) {
+        fabricCanvas.setActiveObject(fabricObject);
+        fabricCanvas.renderAll();
+      }
+    }
 
     canvasObjects.forEach(obj => {
       const objectKeyframes = keyframes[obj.id] || [];
@@ -367,14 +386,13 @@ const Canvas = () => {
     if (!fabricCanvas) return;
 
     const handleKeyDown = (e) => {
-      // Don't delete if we're in drawing mode or editing text
       if (drawingMode) return;
       
       if (e.key === 'Delete' || e.key === 'Backspace') {
         const activeObjects = fabricCanvas.getActiveObjects();
         
         if (activeObjects.length > 0) {
-          e.preventDefault(); // Prevent browser back navigation
+          e.preventDefault();
           
           activeObjects.forEach(fabricObject => {
             if (fabricObject && fabricObject.id) {

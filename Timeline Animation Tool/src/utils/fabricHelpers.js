@@ -3,12 +3,13 @@ import * as fabric from 'fabric';
 /**
  * Create a new Fabric.js object based on type
 */
-
 export const createFabricObject = (type, id) => {
   const baseProps = {
     id,
     left: 100,
     top: 100,
+    originX: 'center', // Fabric uses center by default
+    originY: 'center',
   };
 
   switch (type) {
@@ -34,7 +35,7 @@ export const createFabricObject = (type, id) => {
         fill: '#000000',
       });
     
-    case 'path': // ADD THIS CASE
+    case 'path':
       return null; // Paths are created via createPathFromPoints
       
     default:
@@ -68,7 +69,7 @@ export const createPathFromPoints = (points, id, settings) => {
     }
   }
 
-  return new fabric.Path(pathString, {
+  const path = new fabric.Path(pathString, {
     id,
     stroke: settings.color,
     strokeWidth: settings.strokeWidth,
@@ -76,16 +77,22 @@ export const createPathFromPoints = (points, id, settings) => {
     strokeLineCap: 'round',
     strokeLineJoin: 'round',
     selectable: true,
+    originX: 'center', // Use center origin like other objects
+    originY: 'center',
   });
-};
 
+  return path;
+};
 
 /**
  * Extract properties from a Fabric.js object
+ * Fabric.js stores positions based on origin (usually center)
+ * We need to extract the actual position for animation
 */
 export const extractPropertiesFromFabricObject = (fabricObject) => {
   if (!fabricObject) return null;
 
+  // All objects use center origin in Fabric.js
   const baseProps = {
     x: fabricObject.left || 0,
     y: fabricObject.top || 0,
@@ -95,7 +102,7 @@ export const extractPropertiesFromFabricObject = (fabricObject) => {
     opacity: fabricObject.opacity !== undefined ? fabricObject.opacity : 1,
   };
 
-  // ADD: Include path-specific data for path objects
+  // Include path-specific data for path objects
   if (fabricObject.type === 'path') {
     return {
       ...baseProps,

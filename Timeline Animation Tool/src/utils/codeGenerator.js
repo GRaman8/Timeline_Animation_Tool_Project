@@ -2,6 +2,10 @@
  * Generate HTML, CSS, and JavaScript code from animation data
  */
 
+// FIXED: Use consistent canvas dimensions
+const CANVAS_WIDTH = 1200;
+const CANVAS_HEIGHT = 600;
+
 /**
  * Convert Fabric.js path array to SVG path string
  */
@@ -56,7 +60,6 @@ const generateHTML = () => {
 /**
  * Generate CSS styles
  */
-
 const generateCSS = (canvasObjects, keyframes) => {
   let css = `/* Generated Animation Styles */
 
@@ -69,8 +72,8 @@ body {
 
 #animation-container {
     position: relative;
-    width: 1600px;
-    height: 800px;
+    width: ${CANVAS_WIDTH}px;
+    height: ${CANVAS_HEIGHT}px;
     background-color: #f0f0f0;
     margin: 20px auto;
     border: 1px solid #ccc;
@@ -86,11 +89,29 @@ body {
     const firstKeyframe = objKeyframes[0];
     const props = firstKeyframe.properties;
 
-    css += `#${obj.id} {
+    // For paths, style the container
+    const cssId = obj.type === 'path' ? `${obj.id}_container` : obj.id;
+    
+    // Calculate offset for center-based positioning
+    let leftOffset = 0;
+    let topOffset = 0;
+    
+    if (obj.type === 'path') {
+      const width = obj.boundingBox?.width || 100;
+      const height = obj.boundingBox?.height || 100;
+      leftOffset = -width / 2;
+      topOffset = -height / 2;
+    } else if (obj.type === 'rectangle' || obj.type === 'circle') {
+      leftOffset = -50; // half of 100px
+      topOffset = -50;
+    }
+
+    css += `#${cssId} {
     position: absolute;
-    left: ${props.x}px;
-    top: ${props.y}px;
+    left: ${(props.x + leftOffset).toFixed(2)}px;
+    top: ${(props.y + topOffset).toFixed(2)}px;
     transform: scale(${props.scaleX}, ${props.scaleY}) rotate(${props.rotation}deg);
+    transform-origin: center center;
     opacity: ${props.opacity};
 `;
 
@@ -111,8 +132,7 @@ body {
     white-space: nowrap;
 `;
     } else if (obj.type === 'path') {
-      // Path objects are SVG - no specific CSS needed beyond positioning
-      css += `    /* SVG Path Element */
+      css += `    /* SVG Path Container */
 `;
     }
 
@@ -135,7 +155,6 @@ body {
 /**
  * Generate GSAP JavaScript animation code
  */
-
 const generateJavaScript = (canvasObjects, keyframes, duration) => {
   let js = `// Generated Animation Code
 // Using GSAP (GreenSock Animation Platform)
@@ -157,19 +176,30 @@ document.addEventListener('DOMContentLoaded', () => {
     if (objKeyframes.length === 0) return;
 
     if (obj.type === 'path') {
-      // UPDATED: Create SVG element for paths
       const pathString = fabricPathToSVGPath(obj.pathData);
       const strokeColor = obj.strokeColor || '#000000';
       const strokeWidth = obj.strokeWidth || 3;
+      const width = obj.boundingBox?.width || 100;
+      const height = obj.boundingBox?.height || 100;
       
       js += `    // Create ${obj.name} (SVG Path)
+    const ${obj.id}_container = document.createElement('div');
+    ${obj.id}_container.id = '${obj.id}_container';
+    ${obj.id}_container.style.position = 'absolute';
+    ${obj.id}_container.style.transformOrigin = 'center center';
+    ${obj.id}_container.style.width = '${width}px';
+    ${obj.id}_container.style.height = '${height}px';
+    
     const ${obj.id} = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     ${obj.id}.id = '${obj.id}';
     ${obj.id}.style.position = 'absolute';
+    ${obj.id}.style.left = '0';
+    ${obj.id}.style.top = '0';
     ${obj.id}.style.overflow = 'visible';
     ${obj.id}.style.pointerEvents = 'none';
-    ${obj.id}.setAttribute('width', '1600');
-    ${obj.id}.setAttribute('height', '800');
+    ${obj.id}.setAttribute('width', '${width}');
+    ${obj.id}.setAttribute('height', '${height}');
+    ${obj.id}.setAttribute('viewBox', '0 0 ${width} ${height}');
     
     const path_${obj.id} = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     path_${obj.id}.setAttribute('d', '${pathString}');
@@ -180,14 +210,16 @@ document.addEventListener('DOMContentLoaded', () => {
     path_${obj.id}.setAttribute('stroke-linejoin', 'round');
     
     ${obj.id}.appendChild(path_${obj.id});
-    container.appendChild(${obj.id});
+    ${obj.id}_container.appendChild(${obj.id});
+    container.appendChild(${obj.id}_container);
     
 `;
     } else {
-      // Regular elements
       js += `    // Create ${obj.name}
     const ${obj.id} = document.createElement('div');
     ${obj.id}.id = '${obj.id}';
+    ${obj.id}.style.position = 'absolute';
+    ${obj.id}.style.transformOrigin = 'center center';
 `;
 
       if (obj.type === 'text') {
@@ -209,16 +241,33 @@ document.addEventListener('DOMContentLoaded', () => {
     js += `    // Animate ${obj.name}
 `;
 
+    // Use the container for paths
+    const targetId = obj.type === 'path' ? `${obj.id}_container` : obj.id;
+
     for (let i = 1; i < objKeyframes.length; i++) {
       const prevKf = objKeyframes[i - 1];
       const currKf = objKeyframes[i];
       const duration = currKf.time - prevKf.time;
       const easing = mapEasingToGSAP(currKf.easing || 'linear');
 
-      js += `    tl.to('#${obj.id}', {
+      // Calculate offset for center-based positioning
+      let leftOffset = 0;
+      let topOffset = 0;
+      
+      if (obj.type === 'path') {
+        const width = obj.boundingBox?.width || 100;
+        const height = obj.boundingBox?.height || 100;
+        leftOffset = -width / 2;
+        topOffset = -height / 2;
+      } else if (obj.type === 'rectangle' || obj.type === 'circle') {
+        leftOffset = -50;
+        topOffset = -50;
+      }
+
+      js += `    tl.to('#${targetId}', {
         duration: ${duration.toFixed(2)},
-        x: ${currKf.properties.x.toFixed(2)},
-        y: ${currKf.properties.y.toFixed(2)},
+        left: '${(currKf.properties.x + leftOffset).toFixed(2)}px',
+        top: '${(currKf.properties.y + topOffset).toFixed(2)}px',
         scaleX: ${currKf.properties.scaleX.toFixed(2)},
         scaleY: ${currKf.properties.scaleY.toFixed(2)},
         rotation: ${currKf.properties.rotation.toFixed(2)},
@@ -276,10 +325,9 @@ export const downloadFile = (filename, content) => {
 };
 
 /**
- * Download all files as ZIP (using JSZip would be ideal, but here's a simple multi-file approach)
+ * Download all files
  */
 export const downloadAllFiles = (html, css, javascript) => {
-  // Download each file separately
   downloadFile('index.html', html);
   setTimeout(() => downloadFile('style.css', css), 100);
   setTimeout(() => downloadFile('animation.js', javascript), 200);
