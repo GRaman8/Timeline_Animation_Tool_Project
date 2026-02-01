@@ -2,9 +2,9 @@
  * Generate HTML, CSS, and JavaScript code from animation data
  */
 
-// FIXED: Use consistent canvas dimensions
-const CANVAS_WIDTH = 1200;
-const CANVAS_HEIGHT = 600;
+// Shared canvas dimensions
+const CANVAS_WIDTH = 1400;
+const CANVAS_HEIGHT = 800;
 
 /**
  * Convert Fabric.js path array to SVG path string
@@ -25,6 +25,17 @@ const fabricPathToSVGPath = (pathArray) => {
   });
   
   return pathString.trim();
+};
+
+/**
+ * Get the CSS offset needed to convert Fabric center-point
+ * positioning to CSS top-left positioning.
+ */
+const getOffsets = (obj) => {
+  if (obj.type === 'rectangle' || obj.type === 'circle') {
+    return { x: -50, y: -50 };
+  }
+  return { x: 0, y: 0 };
 };
 
 export const generateAnimationCode = (canvasObjects, keyframes, duration) => {
@@ -58,7 +69,9 @@ const generateHTML = () => {
 };
 
 /**
- * Generate CSS styles
+ * Generate CSS styles.
+ * Paths are NOT styled here — they are full-canvas SVGs positioned at 0,0
+ * and animated via GSAP translate (x/y delta).
  */
 const generateCSS = (canvasObjects, keyframes) => {
   let css = `/* Generated Animation Styles */
@@ -86,30 +99,17 @@ body {
     const objKeyframes = keyframes[obj.id] || [];
     if (objKeyframes.length === 0) return;
 
+    // Paths don't need CSS — they are positioned via inline styles + GSAP
+    if (obj.type === 'path') return;
+
     const firstKeyframe = objKeyframes[0];
     const props = firstKeyframe.properties;
+    const offset = getOffsets(obj);
 
-    // For paths, style the container
-    const cssId = obj.type === 'path' ? `${obj.id}_container` : obj.id;
-    
-    // Calculate offset for center-based positioning
-    let leftOffset = 0;
-    let topOffset = 0;
-    
-    if (obj.type === 'path') {
-      const width = obj.boundingBox?.width || 100;
-      const height = obj.boundingBox?.height || 100;
-      leftOffset = -width / 2;
-      topOffset = -height / 2;
-    } else if (obj.type === 'rectangle' || obj.type === 'circle') {
-      leftOffset = -50; // half of 100px
-      topOffset = -50;
-    }
-
-    css += `#${cssId} {
+    css += `#${obj.id} {
     position: absolute;
-    left: ${(props.x + leftOffset).toFixed(2)}px;
-    top: ${(props.y + topOffset).toFixed(2)}px;
+    left: ${(props.x + offset.x).toFixed(2)}px;
+    top: ${(props.y + offset.y).toFixed(2)}px;
     transform: scale(${props.scaleX}, ${props.scaleY}) rotate(${props.rotation}deg);
     transform-origin: center center;
     opacity: ${props.opacity};
@@ -131,23 +131,12 @@ body {
     color: #000000;
     white-space: nowrap;
 `;
-    } else if (obj.type === 'path') {
-      css += `    /* SVG Path Container */
-`;
     }
 
     css += `}
 
 `;
   });
-
-  css += `.default-animation-object {
-    width: 50px;
-    height: 50px;
-    background-color: #888888;
-    position: absolute;
-}
-`;
 
   return css;
 };
@@ -176,20 +165,15 @@ document.addEventListener('DOMContentLoaded', () => {
     if (objKeyframes.length === 0) return;
 
     if (obj.type === 'path') {
+      
       const pathString = fabricPathToSVGPath(obj.pathData);
       const strokeColor = obj.strokeColor || '#000000';
       const strokeWidth = obj.strokeWidth || 3;
-      const width = obj.boundingBox?.width || 100;
-      const height = obj.boundingBox?.height || 100;
-      
+      const firstKf = objKeyframes[0];
+      const baseX = firstKf.properties.x;
+      const baseY = firstKf.properties.y;
+
       js += `    // Create ${obj.name} (SVG Path)
-    const ${obj.id}_container = document.createElement('div');
-    ${obj.id}_container.id = '${obj.id}_container';
-    ${obj.id}_container.style.position = 'absolute';
-    ${obj.id}_container.style.transformOrigin = 'center center';
-    ${obj.id}_container.style.width = '${width}px';
-    ${obj.id}_container.style.height = '${height}px';
-    
     const ${obj.id} = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     ${obj.id}.id = '${obj.id}';
     ${obj.id}.style.position = 'absolute';
@@ -197,9 +181,8 @@ document.addEventListener('DOMContentLoaded', () => {
     ${obj.id}.style.top = '0';
     ${obj.id}.style.overflow = 'visible';
     ${obj.id}.style.pointerEvents = 'none';
-    ${obj.id}.setAttribute('width', '${width}');
-    ${obj.id}.setAttribute('height', '${height}');
-    ${obj.id}.setAttribute('viewBox', '0 0 ${width} ${height}');
+    ${obj.id}.setAttribute('width', '${CANVAS_WIDTH}');
+    ${obj.id}.setAttribute('height', '${CANVAS_HEIGHT}');
     
     const path_${obj.id} = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     path_${obj.id}.setAttribute('d', '${pathString}');
@@ -210,11 +193,37 @@ document.addEventListener('DOMContentLoaded', () => {
     path_${obj.id}.setAttribute('stroke-linejoin', 'round');
     
     ${obj.id}.appendChild(path_${obj.id});
-    ${obj.id}_container.appendChild(${obj.id});
-    container.appendChild(${obj.id}_container);
+    container.appendChild(${obj.id});
     
 `;
+
+      // Animate path using delta from baseline
+      if (objKeyframes.length >= 2) {
+        js += `    // Animate ${obj.name} (using translate delta from initial position)\n`;
+
+        for (let i = 1; i < objKeyframes.length; i++) {
+          const prevKf = objKeyframes[i - 1];
+          const currKf = objKeyframes[i];
+          const animDuration = currKf.time - prevKf.time;
+          const easing = mapEasingToGSAP(currKf.easing || 'linear');
+
+          js += `    tl.to('#${obj.id}', {
+        duration: ${animDuration.toFixed(2)},
+        x: ${(currKf.properties.x - baseX).toFixed(2)},
+        y: ${(currKf.properties.y - baseY).toFixed(2)},
+        scaleX: ${currKf.properties.scaleX.toFixed(2)},
+        scaleY: ${currKf.properties.scaleY.toFixed(2)},
+        rotation: ${currKf.properties.rotation.toFixed(2)},
+        opacity: ${currKf.properties.opacity.toFixed(2)},
+        ease: '${easing}'
+    }, ${prevKf.time.toFixed(2)});
+    
+`;
+        }
+      }
+
     } else {
+      // Regular div elements (rect, circle, text)
       js += `    // Create ${obj.name}
     const ${obj.id} = document.createElement('div');
     ${obj.id}.id = '${obj.id}';
@@ -233,41 +242,28 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Add animations
+  // Add animations for non-path elements
   canvasObjects.forEach(obj => {
+    if (obj.type === 'path') return; // Already handled above
+
     const objKeyframes = keyframes[obj.id] || [];
     if (objKeyframes.length < 2) return;
+
+    const offset = getOffsets(obj);
 
     js += `    // Animate ${obj.name}
 `;
 
-    // Use the container for paths
-    const targetId = obj.type === 'path' ? `${obj.id}_container` : obj.id;
-
     for (let i = 1; i < objKeyframes.length; i++) {
       const prevKf = objKeyframes[i - 1];
       const currKf = objKeyframes[i];
-      const duration = currKf.time - prevKf.time;
+      const animDur = currKf.time - prevKf.time;
       const easing = mapEasingToGSAP(currKf.easing || 'linear');
 
-      // Calculate offset for center-based positioning
-      let leftOffset = 0;
-      let topOffset = 0;
-      
-      if (obj.type === 'path') {
-        const width = obj.boundingBox?.width || 100;
-        const height = obj.boundingBox?.height || 100;
-        leftOffset = -width / 2;
-        topOffset = -height / 2;
-      } else if (obj.type === 'rectangle' || obj.type === 'circle') {
-        leftOffset = -50;
-        topOffset = -50;
-      }
-
-      js += `    tl.to('#${targetId}', {
-        duration: ${duration.toFixed(2)},
-        left: '${(currKf.properties.x + leftOffset).toFixed(2)}px',
-        top: '${(currKf.properties.y + topOffset).toFixed(2)}px',
+      js += `    tl.to('#${obj.id}', {
+        duration: ${animDur.toFixed(2)},
+        left: '${(currKf.properties.x + offset.x).toFixed(2)}px',
+        top: '${(currKf.properties.y + offset.y).toFixed(2)}px',
         scaleX: ${currKf.properties.scaleX.toFixed(2)},
         scaleY: ${currKf.properties.scaleY.toFixed(2)},
         rotation: ${currKf.properties.rotation.toFixed(2)},

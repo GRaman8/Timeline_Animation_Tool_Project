@@ -29,8 +29,8 @@ import {
 } from '../../utils/interpolation';
 
 // FIXED: Use consistent canvas dimensions across all views
-export const CANVAS_WIDTH = 1200;
-export const CANVAS_HEIGHT = 600;
+export const CANVAS_WIDTH = 1400;
+export const CANVAS_HEIGHT = 800;
 
 const Canvas = () => {
   const canvasRef = useRef(null);

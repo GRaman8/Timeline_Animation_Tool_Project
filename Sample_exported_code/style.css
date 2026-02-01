@@ -9,18 +9,18 @@ body {
 
 #animation-container {
     position: relative;
-    width: 1200px;
-    height: 600px;
+    width: 1400px;
+    height: 800px;
     background-color: #f0f0f0;
     margin: 20px auto;
     border: 1px solid #ccc;
     overflow: hidden;
 }
 
-#element_1769909902000 {
+#element_1769916679791 {
     position: absolute;
-    left: 23.00px;
-    top: 24.00px;
+    left: 14.00px;
+    top: 12.00px;
     transform: scale(1, 1) rotate(0deg);
     transform-origin: center center;
     opacity: 1;
@@ -30,19 +30,3 @@ body {
     background-color: #ef4444;
 }
 
-#path_1769909941271_container {
-    position: absolute;
-    left: 46.00px;
-    top: 457.00px;
-    transform: scale(1, 1) rotate(0deg);
-    transform-origin: center center;
-    opacity: 1;
-    /* SVG Path Container */
-}
-
-.default-animation-object {
-    width: 50px;
-    height: 50px;
-    background-color: #888888;
-    position: absolute;
-}

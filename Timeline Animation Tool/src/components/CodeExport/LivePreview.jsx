@@ -26,6 +26,20 @@ const fabricPathToSVGPath = (pathArray) => {
   return pathString.trim();
 };
 
+/**
+ * Get element size for offset calculation.
+ * Fabric.js positions objects by their CENTER point.
+ * CSS positions elements by their TOP-LEFT corner.
+ * So we subtract half the width/height to convert.
+ */
+const getOffsets = (obj, fabricCanvas) => {
+  if (obj.type === 'rectangle' || obj.type === 'circle') {
+    return { x: -50, y: -50 }; // half of 100x100
+  }
+  // Paths and text: no offset needed (see path explanation below)
+  return { x: 0, y: 0 };
+};
+
 const LivePreview = () => {
   const [canvasObjects] = useCanvasObjects();
   const [keyframes] = useKeyframes();
@@ -37,39 +51,28 @@ const LivePreview = () => {
   useEffect(() => {
     if (!containerRef.current) return;
 
-    // Clear container
     containerRef.current.innerHTML = '';
 
-    // Create GSAP timeline
     if (timelineRef.current) {
       timelineRef.current.kill();
     }
     timelineRef.current = gsap.timeline({ repeat: -1 });
 
-    // Create and animate elements
     canvasObjects.forEach(obj => {
       const objKeyframes = keyframes[obj.id] || [];
       if (objKeyframes.length === 0) return;
 
       let el;
+      let offset = getOffsets(obj, fabricCanvas);
 
       if (obj.type === 'path') {
-        // For paths, we need to get the bounding box from Fabric
-        const fabricObject = findFabricObjectById(fabricCanvas, obj.id);
-        const boundingBox = fabricObject ? {
-          width: fabricObject.width * (fabricObject.scaleX || 1),
-          height: fabricObject.height * (fabricObject.scaleY || 1)
-        } : { width: 0, height: 0 };
         
-        // Create a container div for the SVG to handle positioning properly
-        const container = document.createElement('div');
-        container.id = obj.id + '_container';
-        container.style.position = 'absolute';
-        container.style.transformOrigin = 'center center';
-        container.style.width = boundingBox.width + 'px';
-        container.style.height = boundingBox.height + 'px';
-        
-        // Create SVG element for paths - match container size
+
+        // Get the initial left/top from the first keyframe as our baseline
+        const firstKf = objKeyframes[0];
+        const baseX = firstKf.properties.x;
+        const baseY = firstKf.properties.y;
+
         el = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
         el.id = obj.id;
         el.style.position = 'absolute';
@@ -77,10 +80,9 @@ const LivePreview = () => {
         el.style.top = '0';
         el.style.overflow = 'visible';
         el.style.pointerEvents = 'none';
-        el.setAttribute('width', boundingBox.width);
-        el.setAttribute('height', boundingBox.height);
-        el.setAttribute('viewBox', `0 0 ${boundingBox.width} ${boundingBox.height}`);
-        
+        el.setAttribute('width', CANVAS_WIDTH);
+        el.setAttribute('height', CANVAS_HEIGHT);
+
         const pathElement = document.createElementNS('http://www.w3.org/2000/svg', 'path');
         const pathString = fabricPathToSVGPath(obj.pathData);
         pathElement.setAttribute('d', pathString);
@@ -89,17 +91,41 @@ const LivePreview = () => {
         pathElement.setAttribute('fill', 'none');
         pathElement.setAttribute('stroke-linecap', 'round');
         pathElement.setAttribute('stroke-linejoin', 'round');
-        
+
         el.appendChild(pathElement);
-        container.appendChild(el);
-        containerRef.current.appendChild(container);
-        
-        // Store bounding box for positioning
-        container.dataset.width = boundingBox.width;
-        container.dataset.height = boundingBox.height;
-        
-        // Use container for animation
-        el = container;
+        containerRef.current.appendChild(el);
+
+        // Set initial state: no translation (path is already where it was drawn)
+        gsap.set(el, {
+          x: 0,
+          y: 0,
+          scaleX: firstKf.properties.scaleX,
+          scaleY: firstKf.properties.scaleY,
+          rotation: firstKf.properties.rotation,
+          opacity: firstKf.properties.opacity,
+        });
+
+        // Animate using DELTA from baseline
+        for (let i = 1; i < objKeyframes.length; i++) {
+          const prevKf = objKeyframes[i - 1];
+          const currKf = objKeyframes[i];
+          const animDuration = currKf.time - prevKf.time;
+
+          timelineRef.current.to(el, {
+            duration: animDuration,
+            x: currKf.properties.x - baseX,
+            y: currKf.properties.y - baseY,
+            scaleX: currKf.properties.scaleX,
+            scaleY: currKf.properties.scaleY,
+            rotation: currKf.properties.rotation,
+            opacity: currKf.properties.opacity,
+            ease: currKf.easing || 'none',
+          }, prevKf.time);
+        }
+
+        // Skip the shared animation logic below
+        return;
+
       } else {
         el = document.createElement('div');
         el.id = obj.id;
@@ -118,44 +144,22 @@ const LivePreview = () => {
         } else if (obj.type === 'text') {
           const fabricObject = findFabricObjectById(fabricCanvas, obj.id);
           const textContent = fabricObject?.text || obj.textContent || 'Text';
-          
+
           el.textContent = textContent;
           el.style.fontSize = '24px';
           el.style.color = '#000000';
           el.style.whiteSpace = 'nowrap';
         }
-        
+
         containerRef.current.appendChild(el);
       }
 
-      // Set initial position
+      // --- Shared positioning logic for non-path elements ---
       const firstKf = objKeyframes[0];
-      
-      // Calculate offset for center-based positioning
-      let leftOffset = 0;
-      let topOffset = 0;
-      
-      if (obj.type === 'path') {
-        // For paths, offset by half the bounding box size
-        const width = parseFloat(el.dataset.width) || 0;
-        const height = parseFloat(el.dataset.height) || 0;
-        leftOffset = -width / 2;
-        topOffset = -height / 2;
-      } else if (obj.type === 'rectangle' || obj.type === 'circle') {
-        // For shapes, offset by half their size
-        leftOffset = -50; // half of 100px
-        topOffset = -50;
-      } else if (obj.type === 'text') {
-        // For text, we'll use transform to center it
-        leftOffset = 0;
-        topOffset = 0;
-      }
-      
-      // Set the actual CSS position (Fabric's left/top is center point)
-      el.style.left = (firstKf.properties.x + leftOffset) + 'px';
-      el.style.top = (firstKf.properties.y + topOffset) + 'px';
-      
-      // Then set scale, rotation, opacity with GSAP
+
+      el.style.left = (firstKf.properties.x + offset.x) + 'px';
+      el.style.top = (firstKf.properties.y + offset.y) + 'px';
+
       gsap.set(el, {
         scaleX: firstKf.properties.scaleX,
         scaleY: firstKf.properties.scaleY,
@@ -163,33 +167,15 @@ const LivePreview = () => {
         opacity: firstKf.properties.opacity,
       });
 
-      // Add animations
       for (let i = 1; i < objKeyframes.length; i++) {
         const prevKf = objKeyframes[i - 1];
         const currKf = objKeyframes[i];
         const animDuration = currKf.time - prevKf.time;
 
-        // Calculate offset for each keyframe
-        let leftOffset = 0;
-        let topOffset = 0;
-        
-        if (obj.type === 'path') {
-          const width = parseFloat(el.dataset.width) || 0;
-          const height = parseFloat(el.dataset.height) || 0;
-          leftOffset = -width / 2;
-          topOffset = -height / 2;
-        } else if (obj.type === 'rectangle' || obj.type === 'circle') {
-          leftOffset = -50;
-          topOffset = -50;
-        } else if (obj.type === 'text') {
-          leftOffset = 0;
-          topOffset = 0;
-        }
-
         timelineRef.current.to(el, {
           duration: animDuration,
-          left: (currKf.properties.x + leftOffset) + 'px',
-          top: (currKf.properties.y + topOffset) + 'px',
+          left: (currKf.properties.x + offset.x) + 'px',
+          top: (currKf.properties.y + offset.y) + 'px',
           scaleX: currKf.properties.scaleX,
           scaleY: currKf.properties.scaleY,
           rotation: currKf.properties.rotation,
