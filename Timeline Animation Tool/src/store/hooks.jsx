@@ -9,6 +9,15 @@ import {
   isPlayingState,
   fabricCanvasState,
   selectedObjectPropertiesState,
+  keyframeEasingState,
+  loopPlaybackState,
+  timelineZoomState,
+  selectedKeyframeState,
+  snapToKeyframesState,
+  hasActiveSelectionState,
+  drawingModeState,
+  currentDrawingPathState,
+  drawingToolSettingsState,
 } from './atoms';
 
 import {
@@ -56,4 +65,45 @@ export const useSelectedObjectDetails = () => {
 
 export const useSelectedObjectKeyframes = () => {
   return useRecoilValue(selectedObjectKeyframesSelector);
+};
+
+
+// Phase-3 code: 
+
+// ADD these new hooks at the bottom of the file:
+
+export const useKeyframeEasing = () => {
+  return useRecoilState(keyframeEasingState);
+};
+
+export const useLoopPlayback = () => {
+  return useRecoilState(loopPlaybackState);
+};
+
+export const useTimelineZoom = () => {
+  return useRecoilState(timelineZoomState);
+};
+
+export const useSelectedKeyframe = () => {
+  return useRecoilState(selectedKeyframeState);
+};
+
+export const useSnapToKeyframes = () => {
+  return useRecoilState(snapToKeyframesState);
+};
+
+export const useHasActiveSelection = () => {
+  return useRecoilState(hasActiveSelectionState);
+};
+
+export const useDrawingMode = () => {
+  return useRecoilState(drawingModeState);
+};
+
+export const useCurrentDrawingPath = () => {
+  return useRecoilState(currentDrawingPathState);
+};
+
+export const useDrawingToolSettings = () => {
+  return useRecoilState(drawingToolSettingsState);
 };

@@ -18,6 +18,7 @@ export const keyframesState = atom({
 export const selectedObjectState = atom({
   key: 'selectedObjectState',
   default: null, // object id});
+});
 
 // Timeline state
 export const currentTimeState = atom({
@@ -52,5 +53,68 @@ export const selectedObjectPropertiesState = atom({
     scaleY: 1,
     rotation: 0,
     opacity: 1,
+  },
+});
+
+// Phase-3 code:
+
+// Easing function state for keyframes
+export const keyframeEasingState = atom({
+  key: 'keyframeEasingState',
+  default: {},
+  // Structure: { [objectId]: { [keyframeIndex]: 'easingType' } }
+});
+
+// Loop playback state
+export const loopPlaybackState = atom({
+  key: 'loopPlaybackState',
+  default: false,
+});
+
+// Timeline zoom level
+export const timelineZoomState = atom({
+  key: 'timelineZoomState',
+  default: 1, // 1 = normal, 2 = 2x zoom, 0.5 = 0.5x zoom
+});
+
+// Selected keyframe for editing
+export const selectedKeyframeState = atom({
+  key: 'selectedKeyframeState',
+  default: null,
+  // Structure: { objectId: string, keyframeIndex: number }
+});
+
+// Snap to keyframes setting
+export const snapToKeyframesState = atom({
+  key: 'snapToKeyframesState',
+  default: false,
+});
+
+// Track if any objects are selected (for toolbar button states)
+export const hasActiveSelectionState = atom({
+  key: 'hasActiveSelectionState',
+  default: false,
+});
+
+// Drawing mode state
+export const drawingModeState = atom({
+  key: 'drawingModeState',
+  default: false,
+});
+
+// Current drawing path
+export const currentDrawingPathState = atom({
+  key: 'currentDrawingPathState',
+  default: null,
+  dangerouslyAllowMutability: true,
+});
+
+// Drawing tool settings
+export const drawingToolSettingsState = atom({
+  key: 'drawingToolSettingsState',
+  default: {
+    color: '#000000',
+    strokeWidth: 3,
+    smoothing: true,
   },
 });
