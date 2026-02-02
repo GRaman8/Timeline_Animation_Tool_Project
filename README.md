@@ -8,7 +8,7 @@
 
 ## 🎬 Demo
 
-> 🔗 **Live Demo:** *(coming soon)*
+> 🔗 **Live Demo:** [Timeline Animation Tool](https://timeline-animation-tool-project.vercel.app/)
 
 ---
 
