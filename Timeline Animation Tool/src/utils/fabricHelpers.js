@@ -100,8 +100,10 @@ export const extractPropertiesFromFabricObject = (fabricObject) => {
     scaleY: fabricObject.scaleY || 1,
     rotation: fabricObject.angle || 0,
     opacity: fabricObject.opacity !== undefined ? fabricObject.opacity : 1,
+    anchorX: fabricObject.originX === 'center' ? 0.5 : (fabricObject.originX || 0.5), // NEW
+    anchorY: fabricObject.originY === 'center' ? 0.5 : (fabricObject.originY || 0.5), // NEW
   };
-
+  
   // Include path-specific data for path objects
   if (fabricObject.type === 'path') {
     return {

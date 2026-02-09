@@ -28,6 +28,8 @@ import {
   applyPropertiesToFabricObject 
 } from '../../utils/interpolation';
 
+import AnchorPointOverlay from './AnchorPointOverlay';
+
 // FIXED: Use consistent canvas dimensions across all views
 export const CANVAS_WIDTH = 1400;
 export const CANVAS_HEIGHT = 800;
@@ -381,53 +383,133 @@ const Canvas = () => {
     fabricCanvas.renderAll();
   }, [currentTime, keyframes, canvasObjects, fabricCanvas, isInteracting, selectedObject, isPlaying]);
 
-  // Keyboard delete handler
-  useEffect(() => {
-    if (!fabricCanvas) return;
+// Keyboard shortcuts handler (delete, group, ungroup)
+useEffect(() => {
+  if (!fabricCanvas) return;
 
-    const handleKeyDown = (e) => {
-      if (drawingMode) return;
-      
-      if (e.key === 'Delete' || e.key === 'Backspace') {
-        const activeObjects = fabricCanvas.getActiveObjects();
+  const handleKeyDown = (e) => {
+    if (drawingMode) return;
+    
+    // Group: Cmd/Ctrl + G
+    if ((e.metaKey || e.ctrlKey) && e.key === 'g' && !e.shiftKey) {
+      e.preventDefault();
+      const activeObjects = fabricCanvas.getActiveObjects();
+      if (activeObjects.length > 1) {
+        // Create group
+        const group = new fabric.Group(activeObjects, {
+          id: `group_${Date.now()}`,
+        });
+        activeObjects.forEach(obj => fabricCanvas.remove(obj));
+        fabricCanvas.add(group);
+        fabricCanvas.setActiveObject(group);
+        fabricCanvas.renderAll();
+
+        const childIds = activeObjects.map(obj => obj.id);
+        const groupCount = canvasObjects.filter(obj => obj.type === 'group').length + 1;
         
-        if (activeObjects.length > 0) {
-          e.preventDefault();
-          
-          activeObjects.forEach(fabricObject => {
-            if (fabricObject && fabricObject.id) {
-              fabricCanvas.remove(fabricObject);
-              
-              setCanvasObjects(prev => prev.filter(obj => obj.id !== fabricObject.id));
-              setKeyframes(prev => {
-                const updated = { ...prev };
-                delete updated[fabricObject.id];
-                return updated;
-              });
-            }
-          });
-
-          fabricCanvas.discardActiveObject();
-          fabricCanvas.renderAll();
-          setSelectedObject(null);
-        }
+        setCanvasObjects(prev => [...prev, {
+          id: group.id,
+          type: 'group',
+          name: `Group_${groupCount}`,
+          children: childIds
+        }]);
+        
+        setKeyframes(prev => ({ ...prev, [group.id]: [] }));
+        setSelectedObject(group.id);
       }
-    };
+      return;
+    }
+    
+    // Ungroup: Cmd/Ctrl + Shift + G
+    if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'G') {
+      e.preventDefault();
+      if (!selectedObject) return;
+      
+      const group = fabricCanvas.getObjects().find(obj => obj.id === selectedObject);
+      if (!group || group.type !== 'group') return;
 
-    window.addEventListener('keydown', handleKeyDown);
+      const items = group.getObjects();
+      const groupLeft = group.left;
+      const groupTop = group.top;
+      const groupAngle = group.angle;
+      
+      fabricCanvas.remove(group);
+      items.forEach(item => {
+        item.set({
+          left: groupLeft + item.left,
+          top: groupTop + item.top,
+          angle: groupAngle + item.angle,
+        });
+        fabricCanvas.add(item);
+      });
+      fabricCanvas.renderAll();
 
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [fabricCanvas, drawingMode, setCanvasObjects, setKeyframes, setSelectedObject]);
+      setCanvasObjects(prev => prev.filter(obj => obj.id !== selectedObject));
+      setKeyframes(prev => {
+        const updated = { ...prev };
+        delete updated[selectedObject];
+        return updated;
+      });
+      setSelectedObject(null);
+      return;
+    }
+    
+    // Delete
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      const activeObjects = fabricCanvas.getActiveObjects();
+      
+      if (activeObjects.length > 0) {
+        e.preventDefault();
+        
+        activeObjects.forEach(fabricObject => {
+          if (fabricObject && fabricObject.id) {
+            const objectData = canvasObjects.find(obj => obj.id === fabricObject.id);
+            fabricCanvas.remove(fabricObject);
+            
+            setCanvasObjects(prev => {
+              if (objectData?.type === 'group' && objectData.children) {
+                return prev.filter(obj => 
+                  obj.id !== fabricObject.id && !objectData.children.includes(obj.id)
+                );
+              }
+              return prev.filter(obj => obj.id !== fabricObject.id);
+            });
+            
+            setKeyframes(prev => {
+              const updated = { ...prev };
+              delete updated[fabricObject.id];
+              if (objectData?.type === 'group' && objectData.children) {
+                objectData.children.forEach(childId => {
+                  delete updated[childId];
+                });
+              }
+              return updated;
+            });
+          }
+        });
 
-  return (
-    <Box sx={{ mb: 2, display: 'flex', justifyContent: 'center' }}>
-      <Paper elevation={3} sx={{ display: 'inline-block' }}>
-        <canvas ref={canvasRef} />
-      </Paper>
-    </Box>
-  );
+        fabricCanvas.discardActiveObject();
+        fabricCanvas.renderAll();
+        setSelectedObject(null);
+      }
+    }
+  };
+
+  window.addEventListener('keydown', handleKeyDown);
+
+  return () => {
+    window.removeEventListener('keydown', handleKeyDown);
+  };
+}, [fabricCanvas, drawingMode, canvasObjects, setCanvasObjects, setKeyframes, setSelectedObject, selectedObject]);
+
+return (
+  <Box sx={{ mb: 2, display: 'flex', justifyContent: 'center', position: 'relative' }}>
+    <Paper elevation={3} sx={{ display: 'inline-block', position: 'relative' }}>
+      <canvas ref={canvasRef} />
+      <AnchorPointOverlay />
+    </Paper>
+  </Box>
+);
 };
 
 export default Canvas;

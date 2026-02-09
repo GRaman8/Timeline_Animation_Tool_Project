@@ -1,5 +1,6 @@
 /**
  * Generate HTML, CSS, and JavaScript code from animation data
+ * NOW SUPPORTS GROUPS
  */
 
 // Shared canvas dimensions
@@ -70,8 +71,6 @@ const generateHTML = () => {
 
 /**
  * Generate CSS styles.
- * Paths are NOT styled here — they are full-canvas SVGs positioned at 0,0
- * and animated via GSAP translate (x/y delta).
  */
 const generateCSS = (canvasObjects, keyframes) => {
   let css = `/* Generated Animation Styles */
@@ -95,15 +94,42 @@ body {
 
 `;
 
+  // Only generate CSS for top-level objects (not children of groups)
+  const groupChildren = new Set();
   canvasObjects.forEach(obj => {
+    if (obj.type === 'group' && obj.children) {
+      obj.children.forEach(childId => groupChildren.add(childId));
+    }
+  });
+
+  canvasObjects.forEach(obj => {
+    // Skip children - they'll be styled inside their group
+    if (groupChildren.has(obj.id)) return;
+    
     const objKeyframes = keyframes[obj.id] || [];
     if (objKeyframes.length === 0) return;
 
-    // Paths don't need CSS — they are positioned via inline styles + GSAP
+    // Paths don't need CSS
     if (obj.type === 'path') return;
 
     const firstKeyframe = objKeyframes[0];
     const props = firstKeyframe.properties;
+    
+    // Groups are just containers
+    if (obj.type === 'group') {
+      css += `#${obj.id} {
+    position: absolute;
+    left: ${props.x.toFixed(2)}px;
+    top: ${props.y.toFixed(2)}px;
+    transform: scale(${props.scaleX}, ${props.scaleY}) rotate(${props.rotation}deg);
+    transform-origin: center center;
+    opacity: ${props.opacity};
+}
+
+`;
+      return;
+    }
+
     const offset = getOffsets(obj);
 
     css += `#${obj.id} {
@@ -159,13 +185,78 @@ document.addEventListener('DOMContentLoaded', () => {
     
 `;
 
-  // Create elements
+  // Identify group children
+  const groupChildren = new Set();
   canvasObjects.forEach(obj => {
+    if (obj.type === 'group' && obj.children) {
+      obj.children.forEach(childId => groupChildren.add(childId));
+    }
+  });
+
+  // Create elements (only top-level, not children)
+  canvasObjects.forEach(obj => {
+    if (groupChildren.has(obj.id)) return; // Skip children
+    
     const objKeyframes = keyframes[obj.id] || [];
     if (objKeyframes.length === 0) return;
 
-    if (obj.type === 'path') {
+    if (obj.type === 'group') {
+      // Create group container
+      js += `    // Create ${obj.name} (Group)
+    const ${obj.id} = document.createElement('div');
+    ${obj.id}.id = '${obj.id}';
+    ${obj.id}.style.position = 'absolute';
+    ${obj.id}.style.transformOrigin = 'center center';
+    container.appendChild(${obj.id});
+    
+`;
       
+      // Create children inside group
+      if (obj.children) {
+        obj.children.forEach(childId => {
+          const childObj = canvasObjects.find(o => o.id === childId);
+          if (!childObj) return;
+          
+          const childKeyframes = keyframes[childId] || [];
+          if (childKeyframes.length === 0) return;
+          
+          const firstKf = childKeyframes[0];
+          const offset = getOffsets(childObj);
+          
+          js += `    // Create ${childObj.name} (child of group)
+    const ${childId} = document.createElement('div');
+    ${childId}.id = '${childId}';
+    ${childId}.style.position = 'absolute';
+    ${childId}.style.transformOrigin = 'center center';
+    ${childId}.style.left = '${(firstKf.properties.x + offset.x).toFixed(2)}px';
+    ${childId}.style.top = '${(firstKf.properties.y + offset.y).toFixed(2)}px';
+`;
+
+          if (childObj.type === 'rectangle') {
+            js += `    ${childId}.style.width = '100px';
+    ${childId}.style.height = '100px';
+    ${childId}.style.backgroundColor = '#3b82f6';
+`;
+          } else if (childObj.type === 'circle') {
+            js += `    ${childId}.style.width = '100px';
+    ${childId}.style.height = '100px';
+    ${childId}.style.borderRadius = '50%';
+    ${childId}.style.backgroundColor = '#ef4444';
+`;
+          } else if (childObj.type === 'text') {
+            js += `    ${childId}.textContent = '${childObj.textContent || 'Text'}';
+    ${childId}.style.fontSize = '24px';
+    ${childId}.style.color = '#000000';
+`;
+          }
+          
+          js += `    ${obj.id}.appendChild(${childId});
+    
+`;
+        });
+      }
+      
+    } else if (obj.type === 'path') {
       const pathString = fabricPathToSVGPath(obj.pathData);
       const strokeColor = obj.strokeColor || '#000000';
       const strokeWidth = obj.strokeWidth || 3;
@@ -197,10 +288,9 @@ document.addEventListener('DOMContentLoaded', () => {
     
 `;
 
-      // Animate path using delta from baseline
       if (objKeyframes.length >= 2) {
-        js += `    // Animate ${obj.name} (using translate delta from initial position)\n`;
-
+        js += `    // Animate ${obj.name}
+`;
         for (let i = 1; i < objKeyframes.length; i++) {
           const prevKf = objKeyframes[i - 1];
           const currKf = objKeyframes[i];
@@ -223,7 +313,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
     } else {
-      // Regular div elements (rect, circle, text)
+      // Regular div elements
       js += `    // Create ${obj.name}
     const ${obj.id} = document.createElement('div');
     ${obj.id}.id = '${obj.id}';
@@ -242,14 +332,15 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Add animations for non-path elements
+  // Add animations for top-level objects only
   canvasObjects.forEach(obj => {
+    if (groupChildren.has(obj.id)) return; // Skip children
     if (obj.type === 'path') return; // Already handled above
 
     const objKeyframes = keyframes[obj.id] || [];
     if (objKeyframes.length < 2) return;
 
-    const offset = getOffsets(obj);
+    const offset = obj.type === 'group' ? { x: 0, y: 0 } : getOffsets(obj);
 
     js += `    // Animate ${obj.name}
 `;
@@ -296,7 +387,7 @@ const mapEasingToGSAP = (easing) => {
     'easeOutCubic': 'power2.out',
     'easeInOutCubic': 'power2.inOut',
     'easeInQuart': 'power3.in',
-    'easeOutQuart': 'power3.out',
+    'easeOutQuad': 'power3.out',
     'easeInOutQuart': 'power3.inOut',
     'bounce': 'bounce.out',
     'elastic': 'elastic.out',
