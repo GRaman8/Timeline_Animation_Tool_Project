@@ -118,27 +118,34 @@ const Toolbar = () => {
     const group = fabricCanvas.getObjects().find(obj => obj.id === selectedObject);
     if (!group || group.type !== 'group') return;
 
-    const items = group._objects; // Get the raw objects array
-    const groupData = canvasObjects.find(obj => obj.id === selectedObject);
+    // FIXED: Proper ungrouping with absolute positioning
+    const items = group._objects || [];
+    const groupTransform = group.calcTransformMatrix();
     
     // Remove group from canvas first
     fabricCanvas.remove(group);
 
-    // Add children back to canvas
-    items.forEach((item, index) => {
-      // Reset to absolute positioning
-      const matrix = group.calcTransformMatrix();
+    // Add children back to canvas with absolute positions
+    items.forEach((item) => {
+      // Calculate absolute position using transform matrix
       const point = fabric.util.transformPoint(
         { x: item.left, y: item.top },
-        matrix
+        groupTransform
       );
+      
+      // Calculate absolute scale
+      const absoluteScaleX = (group.scaleX || 1) * (item.scaleX || 1);
+      const absoluteScaleY = (group.scaleY || 1) * (item.scaleY || 1);
+      
+      // Calculate absolute rotation
+      const absoluteAngle = (group.angle || 0) + (item.angle || 0);
       
       item.set({
         left: point.x,
         top: point.y,
-        angle: group.angle + item.angle,
-        scaleX: group.scaleX * item.scaleX,
-        scaleY: group.scaleY * item.scaleY,
+        scaleX: absoluteScaleX,
+        scaleY: absoluteScaleY,
+        angle: absoluteAngle,
       });
       
       item.setCoords();
@@ -147,7 +154,7 @@ const Toolbar = () => {
 
     fabricCanvas.renderAll();
 
-    // Update state - remove group but KEEP children
+    // FIXED: Keep children in canvas objects, only remove group
     setCanvasObjects(prev => prev.filter(obj => obj.id !== selectedObject));
     setKeyframes(prev => {
       const updated = { ...prev };

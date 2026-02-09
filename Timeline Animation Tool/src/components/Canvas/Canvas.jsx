@@ -341,20 +341,25 @@ const Canvas = () => {
     }
   };
 
-  // Update canvas when time changes OR when selected object changes
+  // FIXED: Update canvas when time changes - DON'T hide unselected objects
   useEffect(() => {
     if (!fabricCanvas) return;
     if (isInteracting) return;
+
+    // Ensure all objects are visible
+    fabricCanvas.forEachObject(obj => {
+      obj.visible = true;
+    });
 
     // If there's a selected object, make sure it's active in the canvas
     if (selectedObject && !isPlaying) {
       const fabricObject = findFabricObjectById(fabricCanvas, selectedObject);
       if (fabricObject && fabricCanvas.getActiveObject() !== fabricObject) {
         fabricCanvas.setActiveObject(fabricObject);
-        fabricCanvas.renderAll();
       }
     }
 
+    // Update all objects based on keyframes
     canvasObjects.forEach(obj => {
       const objectKeyframes = keyframes[obj.id] || [];
       if (objectKeyframes.length === 0) return;
@@ -362,6 +367,7 @@ const Canvas = () => {
       const fabricObject = findFabricObjectById(fabricCanvas, obj.id);
       if (!fabricObject) return;
 
+      // FIXED: Only skip interpolation for selected object when NOT playing
       if (fabricObject.id === selectedObject && !isPlaying) {
         return;
       }
@@ -428,22 +434,41 @@ useEffect(() => {
       const group = fabricCanvas.getObjects().find(obj => obj.id === selectedObject);
       if (!group || group.type !== 'group') return;
 
-      const items = group.getObjects();
-      const groupLeft = group.left;
-      const groupTop = group.top;
-      const groupAngle = group.angle;
+      // FIXED: Proper ungrouping with absolute positioning
+      const items = group._objects || [];
+      const groupTransform = group.calcTransformMatrix();
       
       fabricCanvas.remove(group);
+      
       items.forEach(item => {
+        // Calculate absolute position
+        const point = fabric.util.transformPoint(
+          { x: item.left, y: item.top },
+          groupTransform
+        );
+        
+        // Calculate absolute scale
+        const absoluteScaleX = (group.scaleX || 1) * (item.scaleX || 1);
+        const absoluteScaleY = (group.scaleY || 1) * (item.scaleY || 1);
+        
+        // Calculate absolute rotation
+        const absoluteAngle = (group.angle || 0) + (item.angle || 0);
+        
         item.set({
-          left: groupLeft + item.left,
-          top: groupTop + item.top,
-          angle: groupAngle + item.angle,
+          left: point.x,
+          top: point.y,
+          scaleX: absoluteScaleX,
+          scaleY: absoluteScaleY,
+          angle: absoluteAngle,
         });
+        
+        item.setCoords();
         fabricCanvas.add(item);
       });
+
       fabricCanvas.renderAll();
 
+      // FIXED: Keep children in canvas objects, only remove group
       setCanvasObjects(prev => prev.filter(obj => obj.id !== selectedObject));
       setKeyframes(prev => {
         const updated = { ...prev };

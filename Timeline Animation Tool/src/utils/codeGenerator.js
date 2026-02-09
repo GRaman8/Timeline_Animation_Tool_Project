@@ -1,6 +1,6 @@
 /**
  * Generate HTML, CSS, and JavaScript code from animation data
- * NOW SUPPORTS GROUPS
+ * FULLY DEBUGGED VERSION
  */
 
 // Shared canvas dimensions
@@ -39,10 +39,11 @@ const getOffsets = (obj) => {
   return { x: 0, y: 0 };
 };
 
-export const generateAnimationCode = (canvasObjects, keyframes, duration) => {
+// MODIFIED: Accept loopPlayback parameter
+export const generateAnimationCode = (canvasObjects, keyframes, duration, loopPlayback = false) => {
   const html = generateHTML();
   const css = generateCSS(canvasObjects, keyframes);
-  const javascript = generateJavaScript(canvasObjects, keyframes, duration);
+  const javascript = generateJavaScript(canvasObjects, keyframes, duration, loopPlayback);
 
   return { html, css, javascript };
 };
@@ -70,7 +71,7 @@ const generateHTML = () => {
 };
 
 /**
- * Generate CSS styles.
+ * Generate CSS styles - FIXED to not skip children
  */
 const generateCSS = (canvasObjects, keyframes) => {
   let css = `/* Generated Animation Styles */
@@ -94,42 +95,16 @@ body {
 
 `;
 
-  // Only generate CSS for top-level objects (not children of groups)
-  const groupChildren = new Set();
+  // Generate CSS for ALL objects that have keyframes
   canvasObjects.forEach(obj => {
-    if (obj.type === 'group' && obj.children) {
-      obj.children.forEach(childId => groupChildren.add(childId));
-    }
-  });
-
-  canvasObjects.forEach(obj => {
-    // Skip children - they'll be styled inside their group
-    if (groupChildren.has(obj.id)) return;
-    
     const objKeyframes = keyframes[obj.id] || [];
     if (objKeyframes.length === 0) return;
 
-    // Paths don't need CSS
+    // Skip paths - they don't need CSS
     if (obj.type === 'path') return;
 
     const firstKeyframe = objKeyframes[0];
     const props = firstKeyframe.properties;
-    
-    // Groups are just containers
-    if (obj.type === 'group') {
-      css += `#${obj.id} {
-    position: absolute;
-    left: ${props.x.toFixed(2)}px;
-    top: ${props.y.toFixed(2)}px;
-    transform: scale(${props.scaleX}, ${props.scaleY}) rotate(${props.rotation}deg);
-    transform-origin: center center;
-    opacity: ${props.opacity};
-}
-
-`;
-      return;
-    }
-
     const offset = getOffsets(obj);
 
     css += `#${obj.id} {
@@ -157,6 +132,8 @@ body {
     color: #000000;
     white-space: nowrap;
 `;
+    } else if (obj.type === 'group') {
+      // Groups don't need width/height/background
     }
 
     css += `}
@@ -168,9 +145,12 @@ body {
 };
 
 /**
- * Generate GSAP JavaScript animation code
+ * Generate GSAP JavaScript animation code - FIXED
  */
-const generateJavaScript = (canvasObjects, keyframes, duration) => {
+const generateJavaScript = (canvasObjects, keyframes, duration, loopPlayback) => {
+  // Use loopPlayback parameter to determine repeat value
+  const repeatValue = loopPlayback ? -1 : 0;
+  
   let js = `// Generated Animation Code
 // Using GSAP (GreenSock Animation Platform)
 
@@ -179,7 +159,7 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Create timeline
     const tl = gsap.timeline({ 
-        repeat: 0,
+        repeat: ${repeatValue},
         defaults: { duration: 1, ease: "power1.inOut" }
     });
     
@@ -193,12 +173,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Create elements (only top-level, not children)
+  // Create all elements first
   canvasObjects.forEach(obj => {
-    if (groupChildren.has(obj.id)) return; // Skip children
-    
     const objKeyframes = keyframes[obj.id] || [];
     if (objKeyframes.length === 0) return;
+
+    // Skip children - they'll be created inside their parent
+    if (groupChildren.has(obj.id)) return;
 
     if (obj.type === 'group') {
       // Create group container
@@ -223,7 +204,7 @@ document.addEventListener('DOMContentLoaded', () => {
           const firstKf = childKeyframes[0];
           const offset = getOffsets(childObj);
           
-          js += `    // Create ${childObj.name} (child of group)
+          js += `    // Create ${childObj.name} (child of ${obj.name})
     const ${childId} = document.createElement('div');
     ${childId}.id = '${childId}';
     ${childId}.style.position = 'absolute';
@@ -247,6 +228,7 @@ document.addEventListener('DOMContentLoaded', () => {
             js += `    ${childId}.textContent = '${childObj.textContent || 'Text'}';
     ${childId}.style.fontSize = '24px';
     ${childId}.style.color = '#000000';
+    ${childId}.style.whiteSpace = 'nowrap';
 `;
           }
           
@@ -260,9 +242,6 @@ document.addEventListener('DOMContentLoaded', () => {
       const pathString = fabricPathToSVGPath(obj.pathData);
       const strokeColor = obj.strokeColor || '#000000';
       const strokeWidth = obj.strokeWidth || 3;
-      const firstKf = objKeyframes[0];
-      const baseX = firstKf.properties.x;
-      const baseY = firstKf.properties.y;
 
       js += `    // Create ${obj.name} (SVG Path)
     const ${obj.id} = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -288,16 +267,67 @@ document.addEventListener('DOMContentLoaded', () => {
     
 `;
 
-      if (objKeyframes.length >= 2) {
-        js += `    // Animate ${obj.name}
+    } else {
+      // Regular elements (rectangle, circle, text)
+      const firstKf = objKeyframes[0];
+      const offset = getOffsets(obj);
+      
+      js += `    // Create ${obj.name}
+    const ${obj.id} = document.createElement('div');
+    ${obj.id}.id = '${obj.id}';
+    ${obj.id}.style.position = 'absolute';
+    ${obj.id}.style.transformOrigin = 'center center';
+    ${obj.id}.style.left = '${(firstKf.properties.x + offset.x).toFixed(2)}px';
+    ${obj.id}.style.top = '${(firstKf.properties.y + offset.y).toFixed(2)}px';
 `;
-        for (let i = 1; i < objKeyframes.length; i++) {
-          const prevKf = objKeyframes[i - 1];
-          const currKf = objKeyframes[i];
-          const animDuration = currKf.time - prevKf.time;
-          const easing = mapEasingToGSAP(currKf.easing || 'linear');
 
-          js += `    tl.to('#${obj.id}', {
+      if (obj.type === 'rectangle') {
+        js += `    ${obj.id}.style.width = '100px';
+    ${obj.id}.style.height = '100px';
+    ${obj.id}.style.backgroundColor = '#3b82f6';
+`;
+      } else if (obj.type === 'circle') {
+        js += `    ${obj.id}.style.width = '100px';
+    ${obj.id}.style.height = '100px';
+    ${obj.id}.style.borderRadius = '50%';
+    ${obj.id}.style.backgroundColor = '#ef4444';
+`;
+      } else if (obj.type === 'text') {
+        js += `    ${obj.id}.textContent = '${obj.textContent || 'Text'}';
+    ${obj.id}.style.fontSize = '24px';
+    ${obj.id}.style.color = '#000000';
+    ${obj.id}.style.whiteSpace = 'nowrap';
+`;
+      }
+
+      js += `    container.appendChild(${obj.id});
+    
+`;
+    }
+  });
+
+  // Now add animations for top-level objects
+  canvasObjects.forEach(obj => {
+    const objKeyframes = keyframes[obj.id] || [];
+    if (objKeyframes.length < 2) return;
+
+    // Skip children - they move with their parent
+    if (groupChildren.has(obj.id)) return;
+
+    if (obj.type === 'path') {
+      const firstKf = objKeyframes[0];
+      const baseX = firstKf.properties.x;
+      const baseY = firstKf.properties.y;
+
+      js += `    // Animate ${obj.name}
+`;
+      for (let i = 1; i < objKeyframes.length; i++) {
+        const prevKf = objKeyframes[i - 1];
+        const currKf = objKeyframes[i];
+        const animDuration = currKf.time - prevKf.time;
+        const easing = mapEasingToGSAP(currKf.easing || 'linear');
+
+        js += `    tl.to('#${obj.id}', {
         duration: ${animDuration.toFixed(2)},
         x: ${(currKf.properties.x - baseX).toFixed(2)},
         y: ${(currKf.properties.y - baseY).toFixed(2)},
@@ -309,49 +339,20 @@ document.addEventListener('DOMContentLoaded', () => {
     }, ${prevKf.time.toFixed(2)});
     
 `;
-        }
       }
-
     } else {
-      // Regular div elements
-      js += `    // Create ${obj.name}
-    const ${obj.id} = document.createElement('div');
-    ${obj.id}.id = '${obj.id}';
-    ${obj.id}.style.position = 'absolute';
-    ${obj.id}.style.transformOrigin = 'center center';
+      const offset = obj.type === 'group' ? { x: 0, y: 0 } : getOffsets(obj);
+
+      js += `    // Animate ${obj.name}
 `;
 
-      if (obj.type === 'text') {
-        js += `    ${obj.id}.textContent = '${obj.textContent || 'Text'}';
-`;
-      }
+      for (let i = 1; i < objKeyframes.length; i++) {
+        const prevKf = objKeyframes[i - 1];
+        const currKf = objKeyframes[i];
+        const animDur = currKf.time - prevKf.time;
+        const easing = mapEasingToGSAP(currKf.easing || 'linear');
 
-      js += `    container.appendChild(${obj.id});
-    
-`;
-    }
-  });
-
-  // Add animations for top-level objects only
-  canvasObjects.forEach(obj => {
-    if (groupChildren.has(obj.id)) return; // Skip children
-    if (obj.type === 'path') return; // Already handled above
-
-    const objKeyframes = keyframes[obj.id] || [];
-    if (objKeyframes.length < 2) return;
-
-    const offset = obj.type === 'group' ? { x: 0, y: 0 } : getOffsets(obj);
-
-    js += `    // Animate ${obj.name}
-`;
-
-    for (let i = 1; i < objKeyframes.length; i++) {
-      const prevKf = objKeyframes[i - 1];
-      const currKf = objKeyframes[i];
-      const animDur = currKf.time - prevKf.time;
-      const easing = mapEasingToGSAP(currKf.easing || 'linear');
-
-      js += `    tl.to('#${obj.id}', {
+        js += `    tl.to('#${obj.id}', {
         duration: ${animDur.toFixed(2)},
         left: '${(currKf.properties.x + offset.x).toFixed(2)}px',
         top: '${(currKf.properties.y + offset.y).toFixed(2)}px',
@@ -363,6 +364,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }, ${prevKf.time.toFixed(2)});
     
 `;
+      }
     }
   });
 
@@ -387,7 +389,7 @@ const mapEasingToGSAP = (easing) => {
     'easeOutCubic': 'power2.out',
     'easeInOutCubic': 'power2.inOut',
     'easeInQuart': 'power3.in',
-    'easeOutQuad': 'power3.out',
+    'easeOutQuart': 'power3.out',
     'easeInOutQuart': 'power3.inOut',
     'bounce': 'bounce.out',
     'elastic': 'elastic.out',
