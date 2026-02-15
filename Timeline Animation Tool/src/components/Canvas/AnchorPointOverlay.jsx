@@ -1,11 +1,21 @@
 /**
+ * AnchorPointOverlay
  * 
- * Displays and allows dragging of the anchor point (transform origin)
- * for the currently selected object on the Fabric.js canvas.
-*/
+ * Visual editor for setting the rotation pivot point.
+ * 
+ * How it works:
+ * - Shows a red crosshair over the selected object
+ * - Drag the crosshair to set where rotation should pivot from
+ * - The anchor value is stored in canvasObjects state
+ * - LivePreview and exported code use this as CSS transform-origin
+ * - Double-click the crosshair to reset to center (50%, 50%)
+ * 
+ * Note: In the editor canvas, Fabric.js always rotates from the object's
+ * built-in origin (center by default). The custom anchor affects rotation
+ * in LivePreview and exported code via CSS transform-origin.
+ */
 
-import React, { useEffect, useState, useRef } from 'react';
-
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { Box } from '@mui/material';
 
 import { 
@@ -23,165 +33,171 @@ const AnchorPointOverlay = () => {
   const [anchorEditMode] = useAnchorEditMode();
   const [canvasObjects, setCanvasObjects] = useCanvasObjects();
   
-  const [anchorPosition, setAnchorPosition] = useState(null);
+  const [overlayPos, setOverlayPos] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
-  const dragStartRef = useRef(null);
+  const boundingRef = useRef(null);
 
-  // Update anchor position when selection changes or object moves
+  // Get current anchor values
+  const getAnchor = useCallback(() => {
+    const obj = canvasObjects.find(o => o.id === selectedObject);
+    return {
+      anchorX: obj?.anchorX ?? 0.5,
+      anchorY: obj?.anchorY ?? 0.5,
+    };
+  }, [canvasObjects, selectedObject]);
+
+  // Update overlay position when object moves or selection changes
   useEffect(() => {
     if (!fabricCanvas || !selectedObject || !anchorEditMode) {
-      setAnchorPosition(null);
+      setOverlayPos(null);
       return;
     }
 
-    const updateAnchorPosition = () => {
+    const updatePosition = () => {
       const fabricObject = findFabricObjectById(fabricCanvas, selectedObject);
       if (!fabricObject) {
-        setAnchorPosition(null);
+        setOverlayPos(null);
         return;
       }
 
-      // Get object's bounding box
       const bound = fabricObject.getBoundingRect();
-      
-      // Get anchor point from canvas objects state (default to center)
-      const objectData = canvasObjects.find(obj => obj.id === selectedObject);
-      const anchorX = objectData?.anchorX ?? 0.5;
-      const anchorY = objectData?.anchorY ?? 0.5;
+      boundingRef.current = bound;
+      const { anchorX, anchorY } = getAnchor();
 
-      // Calculate anchor position in canvas coordinates
-      const anchorCanvasX = bound.left + (bound.width * anchorX);
-      const anchorCanvasY = bound.top + (bound.height * anchorY);
-
-      setAnchorPosition({
-        x: anchorCanvasX,
-        y: anchorCanvasY,
-        boundLeft: bound.left,
-        boundTop: bound.top,
-        boundWidth: bound.width,
-        boundHeight: bound.height,
+      setOverlayPos({
+        x: bound.left + bound.width * anchorX,
+        y: bound.top + bound.height * anchorY,
       });
     };
 
-    updateAnchorPosition();
+    updatePosition();
 
-    // Update when object moves
-    fabricCanvas.on('object:moving', updateAnchorPosition);
-    fabricCanvas.on('object:scaling', updateAnchorPosition);
-    fabricCanvas.on('object:rotating', updateAnchorPosition);
+    fabricCanvas.on('object:moving', updatePosition);
+    fabricCanvas.on('object:scaling', updatePosition);
+    fabricCanvas.on('object:rotating', updatePosition);
+    fabricCanvas.on('after:render', updatePosition);
 
     return () => {
-      fabricCanvas.off('object:moving', updateAnchorPosition);
-      fabricCanvas.off('object:scaling', updateAnchorPosition);
-      fabricCanvas.off('object:rotating', updateAnchorPosition);
+      fabricCanvas.off('object:moving', updatePosition);
+      fabricCanvas.off('object:scaling', updatePosition);
+      fabricCanvas.off('object:rotating', updatePosition);
+      fabricCanvas.off('after:render', updatePosition);
     };
-  }, [fabricCanvas, selectedObject, anchorEditMode, canvasObjects]);
+  }, [fabricCanvas, selectedObject, anchorEditMode, canvasObjects, getAnchor]);
 
   const handleMouseDown = (e) => {
     e.stopPropagation();
+    e.preventDefault();
     setIsDragging(true);
-    dragStartRef.current = { x: e.clientX, y: e.clientY };
   };
 
-  const handleMouseMove = (e) => {
-    if (!isDragging || !anchorPosition || !fabricCanvas || !selectedObject) return;
+  const handleMouseMove = useCallback((e) => {
+    if (!isDragging || !boundingRef.current || !fabricCanvas) return;
 
-    const fabricObject = findFabricObjectById(fabricCanvas, selectedObject);
-    if (!fabricObject) return;
+    const canvasEl = fabricCanvas.getElement();
+    const rect = canvasEl.getBoundingClientRect();
+    const bound = boundingRef.current;
 
-    // Get canvas element position
-    const canvasElement = fabricCanvas.getElement();
-    const rect = canvasElement.getBoundingClientRect();
-
-    // Calculate mouse position relative to canvas
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
 
-    // Calculate new anchor as percentage of bounding box
-    const newAnchorX = Math.max(0, Math.min(1, 
-      (mouseX - anchorPosition.boundLeft) / anchorPosition.boundWidth
-    ));
-    const newAnchorY = Math.max(0, Math.min(1, 
-      (mouseY - anchorPosition.boundTop) / anchorPosition.boundHeight
-    ));
+    // Clamp anchor to 0-1 range within bounding box
+    const newAnchorX = Math.max(0, Math.min(1, (mouseX - bound.left) / bound.width));
+    const newAnchorY = Math.max(0, Math.min(1, (mouseY - bound.top) / bound.height));
 
-    // Update anchor in state
+    // Update overlay position
+    setOverlayPos({
+      x: bound.left + bound.width * newAnchorX,
+      y: bound.top + bound.height * newAnchorY,
+    });
+
+    // Store in canvasObjects for LivePreview/Export
     setCanvasObjects(prev => prev.map(obj => 
       obj.id === selectedObject
         ? { ...obj, anchorX: newAnchorX, anchorY: newAnchorY }
         : obj
     ));
+  }, [isDragging, fabricCanvas, selectedObject, setCanvasObjects]);
 
-    // Update Fabric.js object origin
-    fabricObject.set({
-      originX: newAnchorX,
-      originY: newAnchorY,
-    });
-
-    fabricCanvas.renderAll();
-  };
-
-  const handleMouseUp = () => {
+  const handleMouseUp = useCallback(() => {
     setIsDragging(false);
-  };
+  }, []);
 
   useEffect(() => {
     if (isDragging) {
       window.addEventListener('mousemove', handleMouseMove);
       window.addEventListener('mouseup', handleMouseUp);
-
       return () => {
         window.removeEventListener('mousemove', handleMouseMove);
         window.removeEventListener('mouseup', handleMouseUp);
       };
     }
-  }, [isDragging, anchorPosition, fabricCanvas, selectedObject]);
+  }, [isDragging, handleMouseMove, handleMouseUp]);
 
-  if (!anchorPosition || !anchorEditMode) return null;
+  // Double-click to reset to center
+  const handleDoubleClick = (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    
+    setCanvasObjects(prev => prev.map(obj => 
+      obj.id === selectedObject
+        ? { ...obj, anchorX: 0.5, anchorY: 0.5 }
+        : obj
+    ));
+  };
+
+  if (!overlayPos || !anchorEditMode) return null;
+
+  const { anchorX, anchorY } = getAnchor();
 
   return (
-    <Box
-      sx={{
-        position: 'absolute',
-        left: anchorPosition.x,
-        top: anchorPosition.y,
-        width: 16,
-        height: 16,
-        transform: 'translate(-50%, -50%)',
-        cursor: isDragging ? 'grabbing' : 'grab',
-        zIndex: 1000,
-        pointerEvents: 'all',
-      }}
-      onMouseDown={handleMouseDown}
-    >
-      {/* Crosshair visual */}
-      <svg width="16" height="16" viewBox="0 0 16 16">
-        <circle 
-          cx="8" 
-          cy="8" 
-          r="6" 
-          fill="none" 
-          stroke="#ff0000" 
-          strokeWidth="2"
-        />
-        <line 
-          x1="8" 
-          y1="0" 
-          x2="8" 
-          y2="16" 
-          stroke="#ff0000" 
-          strokeWidth="2"
-        />
-        <line 
-          x1="0" 
-          y1="8" 
-          x2="16" 
-          y2="8" 
-          stroke="#ff0000" 
-          strokeWidth="2"
-        />
-      </svg>
-    </Box>
+    <>
+      {/* Crosshair indicator */}
+      <Box
+        sx={{
+          position: 'absolute',
+          left: overlayPos.x,
+          top: overlayPos.y,
+          width: 24,
+          height: 24,
+          transform: 'translate(-50%, -50%)',
+          cursor: isDragging ? 'grabbing' : 'grab',
+          zIndex: 1000,
+          pointerEvents: 'all',
+        }}
+        onMouseDown={handleMouseDown}
+        onDoubleClick={handleDoubleClick}
+      >
+        <svg width="24" height="24" viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="8" fill="none" stroke="#ff0000" strokeWidth="2" />
+          <circle cx="12" cy="12" r="2.5" fill="#ff0000" />
+          <line x1="12" y1="0" x2="12" y2="24" stroke="#ff0000" strokeWidth="1.5" />
+          <line x1="0" y1="12" x2="24" y2="12" stroke="#ff0000" strokeWidth="1.5" />
+        </svg>
+      </Box>
+      
+      {/* Label */}
+      <Box
+        sx={{
+          position: 'absolute',
+          left: overlayPos.x + 16,
+          top: overlayPos.y - 28,
+          bgcolor: 'rgba(220, 0, 0, 0.9)',
+          color: 'white',
+          px: 1,
+          py: 0.25,
+          borderRadius: 0.5,
+          fontSize: '11px',
+          fontWeight: 700,
+          pointerEvents: 'none',
+          zIndex: 1001,
+          whiteSpace: 'nowrap',
+          letterSpacing: '0.02em',
+        }}
+      >
+        Pivot: {(anchorX * 100).toFixed(0)}%, {(anchorY * 100).toFixed(0)}%
+      </Box>
+    </>
   );
 };
 

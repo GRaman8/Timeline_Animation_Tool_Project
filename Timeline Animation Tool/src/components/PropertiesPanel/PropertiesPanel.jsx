@@ -19,6 +19,8 @@ import {
   useKeyframes,
   useFabricCanvas,
   useDrawingMode,
+  useAnchorEditMode,
+  useCanvasObjects,
 } from '../../store/hooks';
 
 import { findFabricObjectById, extractPropertiesFromFabricObject } from '../../utils/fabricHelpers';
@@ -31,6 +33,8 @@ const PropertiesPanel = () => {
   const [keyframes] = useKeyframes();
   const [fabricCanvas] = useFabricCanvas();
   const [drawingMode] = useDrawingMode();
+  const [anchorEditMode] = useAnchorEditMode();
+  const [canvasObjects] = useCanvasObjects();
 
   const drawerWidth = 300;
 
@@ -47,25 +51,17 @@ const PropertiesPanel = () => {
     }
   }, [currentTime, selectedObject, fabricCanvas, keyframes, setProperties]);
 
-  // Handle opacity change
   const handleOpacityChange = (event, newValue) => {
     if (!selectedObject || !fabricCanvas) return;
 
     const fabricObject = findFabricObjectById(fabricCanvas, selectedObject);
     if (!fabricObject) return;
 
-    // Update fabric object
     fabricObject.set('opacity', newValue);
     fabricCanvas.renderAll();
-
-    // Update state
-    setProperties(prev => ({
-      ...prev,
-      opacity: newValue
-    }));
+    setProperties(prev => ({ ...prev, opacity: newValue }));
   };
 
-  // Handle position change
   const handlePositionChange = (axis, value) => {
     if (!selectedObject || !fabricCanvas) return;
 
@@ -75,21 +71,17 @@ const PropertiesPanel = () => {
     const numValue = parseFloat(value);
     if (isNaN(numValue)) return;
 
-    if (axis === 'x') {
-      fabricObject.set('left', numValue);
-    } else {
-      fabricObject.set('top', numValue);
-    }
+    // Since all objects use center origin, left/top = center
+    if (axis === 'x') fabricObject.set('left', numValue);
+    else fabricObject.set('top', numValue);
     
+    fabricObject.setCoords();
     fabricCanvas.renderAll();
 
     const props = extractPropertiesFromFabricObject(fabricObject);
-    if (props) {
-      setProperties(props);
-    }
+    if (props) setProperties(props);
   };
 
-  // Handle rotation change
   const handleRotationChange = (value) => {
     if (!selectedObject || !fabricCanvas) return;
 
@@ -100,15 +92,13 @@ const PropertiesPanel = () => {
     if (isNaN(numValue)) return;
 
     fabricObject.set('angle', numValue);
+    fabricObject.setCoords();
     fabricCanvas.renderAll();
 
     const props = extractPropertiesFromFabricObject(fabricObject);
-    if (props) {
-      setProperties(props);
-    }
+    if (props) setProperties(props);
   };
 
-  // Handle scale change
   const handleScaleChange = (axis, value) => {
     if (!selectedObject || !fabricCanvas) return;
 
@@ -118,19 +108,21 @@ const PropertiesPanel = () => {
     const numValue = parseFloat(value);
     if (isNaN(numValue) || numValue <= 0) return;
 
-    if (axis === 'x') {
-      fabricObject.set('scaleX', numValue);
-    } else {
-      fabricObject.set('scaleY', numValue);
-    }
+    if (axis === 'x') fabricObject.set('scaleX', numValue);
+    else fabricObject.set('scaleY', numValue);
     
+    fabricObject.setCoords();
     fabricCanvas.renderAll();
 
     const props = extractPropertiesFromFabricObject(fabricObject);
-    if (props) {
-      setProperties(props);
-    }
+    if (props) setProperties(props);
   };
+
+  // Anchor info
+  const objectData = canvasObjects.find(obj => obj.id === selectedObject);
+  const anchorX = objectData?.anchorX ?? 0.5;
+  const anchorY = objectData?.anchorY ?? 0.5;
+  const hasCustomAnchor = Math.abs(anchorX - 0.5) > 0.01 || Math.abs(anchorY - 0.5) > 0.01;
 
   return (
     <Drawer
@@ -149,13 +141,58 @@ const PropertiesPanel = () => {
     >
       <Box sx={{ p: 2, height: '100%', overflow: 'auto' }}>
         <Typography variant="h6" gutterBottom>
-          {drawingMode ? 'Drawing Tool': 'Properties'}
+          {drawingMode ? 'Drawing Tool' : anchorEditMode ? 'Anchor Point' : 'Properties'}
         </Typography>
-        
 
-        
         {drawingMode ? (
           <DrawingSettings />
+        ) : anchorEditMode ? (
+          <>
+            {selectedObject ? (
+              <Box>
+                <Paper variant="outlined" sx={{ p: 2, mb: 2, bgcolor: 'error.light', color: 'error.contrastText' }}>
+                  <Typography variant="body2" fontWeight={600}>
+                    🎯 Anchor Point Mode
+                  </Typography>
+                  <Typography variant="caption">
+                    Drag the red crosshair to set the rotation pivot
+                  </Typography>
+                </Paper>
+
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, mb: 2 }}>
+                  <Typography variant="body2">
+                    <strong>Pivot X:</strong> {(anchorX * 100).toFixed(0)}%
+                  </Typography>
+                  <Typography variant="body2">
+                    <strong>Pivot Y:</strong> {(anchorY * 100).toFixed(0)}%
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    0% = left/top edge, 50% = center, 100% = right/bottom edge
+                  </Typography>
+                </Box>
+
+                <Divider sx={{ my: 2 }} />
+
+                <Paper variant="outlined" sx={{ p: 2, bgcolor: 'info.light', color: 'info.contrastText' }}>
+                  <Typography variant="body2" sx={{ lineHeight: 1.6 }}>
+                    💡 <strong>How to use:</strong>
+                    <br />• Drag the red crosshair on the canvas
+                    <br />• Double-click the crosshair to reset to center
+                    <br />• The pivot affects rotation in Live Preview and exported code
+                    <br />• Example: Set to 50%, 0% for a pendulum swinging from its top
+                    <br />• Example: Set to 0%, 50% for a door hinge on the left
+                    <br />• Set the anchor BEFORE adding rotation keyframes
+                  </Typography>
+                </Paper>
+              </Box>
+            ) : (
+              <Paper variant="outlined" sx={{ p: 3, textAlign: 'center', bgcolor: 'grey.50' }}>
+                <Typography variant="body2" color="text.secondary">
+                  Select an object to edit its anchor point
+                </Typography>
+              </Paper>
+            )}
+          </>
         ) : selectedObject && selectedDetails ? (
           <>
             <Box>
@@ -168,12 +205,13 @@ const PropertiesPanel = () => {
                 </Typography>
                 <Typography variant="caption">
                   {selectedDetails.type}
+                  {hasCustomAnchor && ` • Pivot: ${(anchorX*100).toFixed(0)}%, ${(anchorY*100).toFixed(0)}%`}
                 </Typography>
               </Paper>
 
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                 <TextField
-                  label="X Position"
+                  label="X Position (center)"
                   type="number"
                   value={Math.round(properties.x)}
                   size="small"
@@ -183,7 +221,7 @@ const PropertiesPanel = () => {
                 />
                 
                 <TextField
-                  label="Y Position"
+                  label="Y Position (center)"
                   type="number"
                   value={Math.round(properties.y)}
                   size="small"
@@ -248,8 +286,12 @@ const PropertiesPanel = () => {
                 sx={{ p: 2, bgcolor: 'info.light', color: 'info.contrastText' }}
               >
                 <Typography variant="body2" sx={{ lineHeight: 1.6 }}>
-                  💡 <strong>Tip:</strong> All properties are now editable! Change values here 
-                  or drag objects on the canvas. Click "Add Keyframe" to record the current state.
+                  💡 <strong>Tip:</strong> X/Y values represent the object's center position. 
+                  Change values here or drag objects on the canvas. Click "Add Keyframe" to record.
+                  {hasCustomAnchor && (
+                    <><br /><br />🎯 Custom pivot set at ({(anchorX*100).toFixed(0)}%, {(anchorY*100).toFixed(0)}%). 
+                    Rotation in Live Preview and exported code will use this pivot point.</>
+                  )}
                 </Typography>
               </Paper>
             </Box>
@@ -264,7 +306,6 @@ const PropertiesPanel = () => {
             </Typography>
           </Paper>
         )}
-
       </Box>
     </Drawer>
   );

@@ -43,10 +43,8 @@ const Toolbar = () => {
   const [drawingMode, setDrawingMode] = useDrawingMode();
   const [anchorEditMode, setAnchorEditMode] = useAnchorEditMode();
 
-  // Check if multiple objects are selected (for group button)
   const canGroup = fabricCanvas?.getActiveObjects().length > 1;
   
-  // Check if selected object is a group (for ungroup button)
   const canUngroup = React.useMemo(() => {
     if (!fabricCanvas || !selectedObject) return false;
     const obj = fabricCanvas.getObjects().find(o => o.id === selectedObject);
@@ -67,12 +65,7 @@ const Toolbar = () => {
     fabricCanvas.setActiveObject(fabricObject);
     fabricCanvas.renderAll();
 
-    setCanvasObjects(prev => [...prev, { 
-      id, 
-      type, 
-      name,
-      textContent: type === 'text' ? 'Text' : undefined
-    }]);
+    setCanvasObjects(prev => [...prev, { id, type, name, textContent: type === 'text' ? 'Text' : undefined }]);
     setKeyframes(prev => ({ ...prev, [id]: [] }));
   };
 
@@ -82,30 +75,28 @@ const Toolbar = () => {
     const activeObjects = fabricCanvas.getActiveObjects();
     if (activeObjects.length < 2) return;
 
-    // Create Fabric.js group
-    const group = new fabric.Group(activeObjects, {
+    const objectsList = [...activeObjects];
+    const childIds = objectsList.map(obj => obj.id);
+    
+    fabricCanvas.discardActiveObject();
+    objectsList.forEach(obj => fabricCanvas.remove(obj));
+    
+    // CRITICAL: Create group with center origin
+    const group = new fabric.Group(objectsList, {
       id: `group_${Date.now()}`,
+      originX: 'center',
+      originY: 'center',
     });
     
-    const childIds = activeObjects.map(obj => obj.id);
-
-    // Remove individual objects from canvas
-    activeObjects.forEach(obj => fabricCanvas.remove(obj));
-    
-    // Add group to canvas
     fabricCanvas.add(group);
     fabricCanvas.setActiveObject(group);
     fabricCanvas.renderAll();
 
-    // Update state
     const groupCount = canvasObjects.filter(obj => obj.type === 'group').length + 1;
     
-    // Delete children keyframes when grouping
     setKeyframes(prev => {
       const updated = { ...prev };
-      childIds.forEach(childId => {
-        delete updated[childId];
-      });
+      childIds.forEach(childId => { delete updated[childId]; });
       updated[group.id] = [];
       return updated;
     });
@@ -120,36 +111,39 @@ const Toolbar = () => {
     setSelectedObject(group.id);
   };
 
-  // FIXED: Use ungroupFabricGroup helper for proper coordinate handling
   const ungroupObjects = () => {
     if (!fabricCanvas || !selectedObject) return;
 
     const group = fabricCanvas.getObjects().find(obj => obj.id === selectedObject);
     if (!group || group.type !== 'group') return;
 
-    // Use the helper that properly handles Fabric.js 6 ungrouping
     const restoredItems = ungroupFabricGroup(fabricCanvas, group);
 
     if (restoredItems.length > 0) {
-      // Remove group from state (children remain)
       setCanvasObjects(prev => prev.filter(obj => obj.id !== selectedObject));
       
-      // Remove group keyframes
       setKeyframes(prev => {
         const updated = { ...prev };
         delete updated[selectedObject];
+        restoredItems.forEach(item => {
+          if (item.id && updated[item.id] === undefined) {
+            updated[item.id] = [];
+          }
+        });
         return updated;
       });
       
       setSelectedObject(null);
       
-      // Ensure all canvas objects are visible and selectable
-      fabricCanvas.forEachObject(obj => {
-        obj.visible = true;
-        obj.selectable = true;
-        obj.evented = true;
-      });
-      fabricCanvas.requestRenderAll();
+      setTimeout(() => {
+        fabricCanvas.forEachObject(obj => {
+          obj.visible = true;
+          obj.selectable = true;
+          obj.evented = true;
+          obj.dirty = true;
+        });
+        fabricCanvas.requestRenderAll();
+      }, 0);
     }
   };
 
@@ -160,9 +154,7 @@ const Toolbar = () => {
     
     if (activeObjects.length === 0 && selectedObject) {
       const fabricObject = fabricCanvas.getObjects().find(obj => obj.id === selectedObject);
-      if (fabricObject) {
-        activeObjects.push(fabricObject);
-      }
+      if (fabricObject) activeObjects.push(fabricObject);
     }
 
     if (activeObjects.length === 0) return;
@@ -170,11 +162,9 @@ const Toolbar = () => {
     activeObjects.forEach(fabricObject => {
       if (fabricObject && fabricObject.id) {
         const objectData = canvasObjects.find(obj => obj.id === fabricObject.id);
-        
         fabricCanvas.remove(fabricObject);
         
         setCanvasObjects(prev => {
-          // Remove the object and its children if it's a group
           if (objectData?.type === 'group' && objectData.children) {
             return prev.filter(obj => 
               obj.id !== fabricObject.id && !objectData.children.includes(obj.id)
@@ -186,14 +176,9 @@ const Toolbar = () => {
         setKeyframes(prev => {
           const updated = { ...prev };
           delete updated[fabricObject.id];
-          
-          // Also delete keyframes for children if it's a group
           if (objectData?.type === 'group' && objectData.children) {
-            objectData.children.forEach(childId => {
-              delete updated[childId];
-            });
+            objectData.children.forEach(childId => { delete updated[childId]; });
           }
-          
           return updated;
         });
       }
@@ -208,32 +193,22 @@ const Toolbar = () => {
     if (!fabricCanvas) return;
     
     const activeObjects = fabricCanvas.getActiveObjects();
-    
     if (activeObjects.length === 0 && selectedObject) {
       const fabricObject = fabricCanvas.getObjects().find(obj => obj.id === selectedObject);
-      if (fabricObject) {
-        activeObjects.push(fabricObject);
-      }
+      if (fabricObject) activeObjects.push(fabricObject);
     }
-
     if (activeObjects.length === 0) return;
 
     activeObjects.forEach(fabricObject => {
-      if (direction === 'up') {
-        fabricCanvas.bringForward(fabricObject);
-      } else {
-        fabricCanvas.sendBackwards(fabricObject);
-      }
+      if (direction === 'up') fabricCanvas.bringForward(fabricObject);
+      else fabricCanvas.sendBackwards(fabricObject);
     });
-    
     fabricCanvas.renderAll();
   };
 
   const toggleDrawingMode = () => {
     if (!fabricCanvas) return;
-    
     setDrawingMode(!drawingMode);
-    
     if (!drawingMode) {
       fabricCanvas.discardActiveObject();
       fabricCanvas.renderAll();
@@ -274,15 +249,12 @@ const Toolbar = () => {
         <IconButton 
           onClick={toggleDrawingMode} 
           color={drawingMode ? "secondary" : "primary"}
-          sx={{
-            color: drawingMode ? 'secondary.main' : 'primary.main',
-          }}
         >
           <BrushIcon />
         </IconButton>
       </Tooltip>
 
-      <Tooltip title={anchorEditMode ? "Exit Anchor Mode" : "Edit Anchor Point"} placement="right">
+      <Tooltip title={anchorEditMode ? "Exit Anchor Mode" : "Edit Anchor Point (Rotation Pivot)"} placement="right">
         <IconButton 
           onClick={() => setAnchorEditMode(!anchorEditMode)} 
           color={anchorEditMode ? "secondary" : "primary"}
@@ -296,11 +268,7 @@ const Toolbar = () => {
       
       <Tooltip title="Group Selected (Cmd/Ctrl+G)" placement="right">
         <span>
-          <IconButton 
-            onClick={groupObjects} 
-            disabled={!canGroup}
-            color="primary"
-          >
+          <IconButton onClick={groupObjects} disabled={!canGroup} color="primary">
             <GroupIcon />
           </IconButton>
         </span>
@@ -308,11 +276,7 @@ const Toolbar = () => {
       
       <Tooltip title="Ungroup (Cmd/Ctrl+Shift+G)" placement="right">
         <span>
-          <IconButton 
-            onClick={ungroupObjects} 
-            disabled={!canUngroup}
-            color="primary"
-          >
+          <IconButton onClick={ungroupObjects} disabled={!canUngroup} color="primary">
             <UngroupIcon />
           </IconButton>
         </span>
@@ -322,11 +286,7 @@ const Toolbar = () => {
       
       <Tooltip title="Delete Selected" placement="right">
         <span>
-          <IconButton 
-            onClick={deleteObject} 
-            disabled={!hasActiveSelection}
-            color="error"
-          >
+          <IconButton onClick={deleteObject} disabled={!hasActiveSelection} color="error">
             <DeleteIcon />
           </IconButton>
         </span>
@@ -334,10 +294,7 @@ const Toolbar = () => {
       
       <Tooltip title="Bring Forward" placement="right">
         <span>
-          <IconButton 
-            onClick={() => moveLayer('up')} 
-            disabled={!hasActiveSelection}
-          >
+          <IconButton onClick={() => moveLayer('up')} disabled={!hasActiveSelection}>
             <ArrowUpIcon />
           </IconButton>
         </span>
@@ -345,10 +302,7 @@ const Toolbar = () => {
       
       <Tooltip title="Send Backward" placement="right">
         <span>
-          <IconButton 
-            onClick={() => moveLayer('down')} 
-            disabled={!hasActiveSelection}
-          >
+          <IconButton onClick={() => moveLayer('down')} disabled={!hasActiveSelection}>
             <ArrowDownIcon />
           </IconButton>
         </span>

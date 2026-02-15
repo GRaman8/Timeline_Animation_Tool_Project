@@ -21,7 +21,6 @@ export const findSurroundingKeyframes = (keyframes, time) => {
     if (kf.time >= time && !after) after = kf;
   }
 
-  // Handle edge cases
   if (!before && after) before = after;
   if (before && !after) after = before;
 
@@ -52,10 +51,12 @@ export const interpolateProperties = (beforeKf, afterKf, time, easingType = 'lin
 };
 
 /**
- * FIXED: Do NOT change originX/originY during animation.
- * Changing origin from 'center' (string) to 0.5 (number) causes Fabric.js
- * to recalculate the object's position, resulting in a visible jump/misalignment.
- * Origin should only be changed explicitly by the anchor point editor.
+ * Apply interpolated properties to a Fabric.js object.
+ * 
+ * Since ALL objects use originX:'center', originY:'center',
+ * setting left/top directly sets the center position.
+ * 
+ * NEVER change originX/originY here - it causes position jumps.
  */
 export const applyPropertiesToFabricObject = (fabricObject, properties) => {
   if (!fabricObject || !properties) return;
@@ -67,7 +68,6 @@ export const applyPropertiesToFabricObject = (fabricObject, properties) => {
     scaleY: properties.scaleY,
     angle: properties.rotation,
     opacity: properties.opacity,
-    // DO NOT set originX/originY here - it causes position jumps
   });
 };
 

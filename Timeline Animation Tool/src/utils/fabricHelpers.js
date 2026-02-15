@@ -1,8 +1,9 @@
 import * as fabric from 'fabric';
 
 /**
- * Create a new Fabric.js object based on type
-*/
+ * Create a new Fabric.js object based on type.
+ * ALL objects use originX:'center', originY:'center' so left/top = center.
+ */
 export const createFabricObject = (type, id) => {
   const baseProps = {
     id,
@@ -36,7 +37,7 @@ export const createFabricObject = (type, id) => {
       });
     
     case 'path':
-      return null; // Paths are created via createPathFromPoints
+      return null;
       
     default:
       return null;
@@ -49,21 +50,17 @@ export const createFabricObject = (type, id) => {
 export const createPathFromPoints = (points, id, settings) => {
   if (points.length < 2) return null;
 
-  // Convert points to SVG path string
   let pathString = `M ${points[0].x} ${points[0].y}`;
   
   if (settings.smoothing && points.length > 2) {
-    // Use quadratic curves for smoother paths
     for (let i = 1; i < points.length - 1; i++) {
       const xc = (points[i].x + points[i + 1].x) / 2;
       const yc = (points[i].y + points[i + 1].y) / 2;
       pathString += ` Q ${points[i].x} ${points[i].y}, ${xc} ${yc}`;
     }
-    // Add the last point
     const lastPoint = points[points.length - 1];
     pathString += ` L ${lastPoint.x} ${lastPoint.y}`;
   } else {
-    // Simple line segments
     for (let i = 1; i < points.length; i++) {
       pathString += ` L ${points[i].x} ${points[i].y}`;
     }
@@ -85,10 +82,11 @@ export const createPathFromPoints = (points, id, settings) => {
 };
 
 /**
- * Extract properties from a Fabric.js object
- * FIXED: Don't extract anchorX/anchorY - origin should not be animated
- * as changing it during playback causes position jumps.
-*/
+ * Extract properties from a Fabric.js object.
+ * 
+ * Since ALL objects (including groups) are created with originX:'center',
+ * left/top directly gives us the center position. Simple and consistent.
+ */
 export const extractPropertiesFromFabricObject = (fabricObject) => {
   if (!fabricObject) return null;
 
@@ -101,7 +99,6 @@ export const extractPropertiesFromFabricObject = (fabricObject) => {
     opacity: fabricObject.opacity !== undefined ? fabricObject.opacity : 1,
   };
   
-  // Include path-specific data for path objects
   if (fabricObject.type === 'path') {
     return {
       ...baseProps,
@@ -123,57 +120,83 @@ export const findFabricObjectById = (canvas, id) => {
 };
 
 /**
- * FIXED: Properly ungroup a Fabric.js group, returning children with absolute transforms.
- * This handles Fabric.js 6's coordinate system correctly and clears group references.
+ * Properly ungroup a Fabric.js group.
+ * 
+ * Strategy: compute absolute position for each child using the group's
+ * transform matrix, then remove the group, then add each child back
+ * as an independent object with forced clean state.
  */
 export const ungroupFabricGroup = (fabricCanvas, group) => {
   if (!fabricCanvas || !group || group.type !== 'group') return [];
 
-  // CRITICAL: Copy all child data BEFORE modifying the group
   const items = [...(group._objects || [])];
-  const groupMatrix = group.calcTransformMatrix();
+  if (items.length === 0) return [];
   
-  // Pre-calculate absolute transforms for each child
+  const groupMatrix = group.calcTransformMatrix();
+  const groupScaleX = group.scaleX || 1;
+  const groupScaleY = group.scaleY || 1;
+  const groupAngle = group.angle || 0;
+  const groupOpacity = group.opacity !== undefined ? group.opacity : 1;
+
+  // Pre-calculate absolute transforms for each child BEFORE removing group
   const childrenData = items.map(item => {
-    // Transform child's relative position to absolute canvas position
-    const point = fabric.util.transformPoint(
-      { x: item.left || 0, y: item.top || 0 },
-      groupMatrix
-    );
+    // Get child's local position (relative to group center)
+    const localPoint = { x: item.left || 0, y: item.top || 0 };
+    
+    // Transform to absolute canvas coordinates using group matrix
+    const absPoint = fabric.util.transformPoint(localPoint, groupMatrix);
     
     return {
       item,
-      absoluteLeft: point.x,
-      absoluteTop: point.y,
-      absoluteScaleX: (group.scaleX || 1) * (item.scaleX || 1),
-      absoluteScaleY: (group.scaleY || 1) * (item.scaleY || 1),
-      absoluteAngle: (group.angle || 0) + (item.angle || 0),
-      absoluteOpacity: (group.opacity !== undefined ? group.opacity : 1) * 
-                       (item.opacity !== undefined ? item.opacity : 1),
+      absLeft: absPoint.x,
+      absTop: absPoint.y,
+      absScaleX: groupScaleX * (item.scaleX || 1),
+      absScaleY: groupScaleY * (item.scaleY || 1),
+      absAngle: groupAngle + (item.angle || 0),
+      absOpacity: groupOpacity * (item.opacity !== undefined ? item.opacity : 1),
     };
   });
 
   // Remove group from canvas
   fabricCanvas.remove(group);
 
-  // Restore each child with absolute transforms
+  // Add each child back as independent object
   const restoredItems = [];
-  childrenData.forEach(({ item, absoluteLeft, absoluteTop, absoluteScaleX, absoluteScaleY, absoluteAngle, absoluteOpacity }) => {
-    // CRITICAL: Clear group reference so Fabric.js treats it as independent
+  childrenData.forEach(({ item, absLeft, absTop, absScaleX, absScaleY, absAngle, absOpacity }) => {
+    // CRITICAL: Clear ALL stale internal references from the group
+    // This is the fix for objects disappearing after ungrouping
     item.group = undefined;
     item.canvas = undefined;
+    if (item._cacheCanvas) {
+      item._cacheCanvas = null;
+    }
     
+    // Set absolute position and transforms
     item.set({
-      left: absoluteLeft,
-      top: absoluteTop,
-      scaleX: absoluteScaleX,
-      scaleY: absoluteScaleY,
-      angle: absoluteAngle,
-      opacity: absoluteOpacity,
+      left: absLeft,
+      top: absTop,
+      scaleX: absScaleX,
+      scaleY: absScaleY,
+      angle: absAngle,
+      opacity: absOpacity,
+      // Ensure center origin is maintained
+      originX: 'center',
+      originY: 'center',
+      // Force visibility
+      visible: true,
+      selectable: true,
+      evented: true,
     });
     
-    item.setCoords();
+    // Mark as needing full recalculation
+    item.dirty = true;
+    
+    // Add to canvas
     fabricCanvas.add(item);
+    
+    // Recalculate controls/bounds
+    item.setCoords();
+    
     restoredItems.push(item);
   });
 
