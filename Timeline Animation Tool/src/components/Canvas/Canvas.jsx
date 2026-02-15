@@ -30,7 +30,6 @@ import {
 
 import AnchorPointOverlay from './AnchorPointOverlay';
 
-// FIXED: Use consistent canvas dimensions across all views
 export const CANVAS_WIDTH = 1400;
 export const CANVAS_HEIGHT = 800;
 
@@ -110,7 +109,6 @@ const Canvas = () => {
       if (e.target) {
         updateProperties(e.target);
         
-        // Update the canvas object's stored data
         if (e.target.type === 'path') {
           setCanvasObjects(prev => prev.map(obj => 
             obj.id === e.target.id 
@@ -341,17 +339,18 @@ const Canvas = () => {
     }
   };
 
-  // FIXED: Update canvas when time changes - DON'T hide unselected objects
+  // FIXED: Canvas update - handle visibility and interpolation correctly
   useEffect(() => {
     if (!fabricCanvas) return;
     if (isInteracting) return;
 
-    // Ensure all objects are visible
+    // CRITICAL: Make sure all objects are visible
     fabricCanvas.forEachObject(obj => {
       obj.visible = true;
+      obj.opacity = obj.opacity || 1;
     });
 
-    // If there's a selected object, make sure it's active in the canvas
+    // Update selected object's active state
     if (selectedObject && !isPlaying) {
       const fabricObject = findFabricObjectById(fabricCanvas, selectedObject);
       if (fabricObject && fabricCanvas.getActiveObject() !== fabricObject) {
@@ -359,32 +358,30 @@ const Canvas = () => {
       }
     }
 
-    // Update all objects based on keyframes
-    canvasObjects.forEach(obj => {
-      const objectKeyframes = keyframes[obj.id] || [];
-      if (objectKeyframes.length === 0) return;
+    // Update all objects based on keyframes - but ONLY if they have keyframes AND we're playing
+    // FIXED: Don't interpolate when not playing to prevent objects from jumping
+    if (isPlaying) {
+      canvasObjects.forEach(obj => {
+        const objectKeyframes = keyframes[obj.id] || [];
+        if (objectKeyframes.length === 0) return;
 
-      const fabricObject = findFabricObjectById(fabricCanvas, obj.id);
-      if (!fabricObject) return;
+        const fabricObject = findFabricObjectById(fabricCanvas, obj.id);
+        if (!fabricObject) return;
 
-      // FIXED: Only skip interpolation for selected object when NOT playing
-      if (fabricObject.id === selectedObject && !isPlaying) {
-        return;
-      }
-
-      const { before, after } = findSurroundingKeyframes(objectKeyframes, currentTime);
-      
-      let easingType = 'linear';
-      if (before && after && before !== after) {
-        easingType = after.easing || 'linear';
-      }
-      
-      const interpolated = interpolateProperties(before, after, currentTime, easingType);
-      
-      if (interpolated) {
-        applyPropertiesToFabricObject(fabricObject, interpolated);
-      }
-    });
+        const { before, after } = findSurroundingKeyframes(objectKeyframes, currentTime);
+        
+        let easingType = 'linear';
+        if (before && after && before !== after) {
+          easingType = after.easing || 'linear';
+        }
+        
+        const interpolated = interpolateProperties(before, after, currentTime, easingType);
+        
+        if (interpolated) {
+          applyPropertiesToFabricObject(fabricObject, interpolated);
+        }
+      });
+    }
 
     fabricCanvas.renderAll();
   }, [currentTime, keyframes, canvasObjects, fabricCanvas, isInteracting, selectedObject, isPlaying]);
@@ -405,13 +402,31 @@ useEffect(() => {
         const group = new fabric.Group(activeObjects, {
           id: `group_${Date.now()}`,
         });
+        
+        // Store child IDs and their Fabric objects for later
+        const childIds = activeObjects.map(obj => obj.id);
+        
+        // Remove individual objects from canvas
         activeObjects.forEach(obj => fabricCanvas.remove(obj));
+        
+        // Add group to canvas
         fabricCanvas.add(group);
         fabricCanvas.setActiveObject(group);
         fabricCanvas.renderAll();
 
-        const childIds = activeObjects.map(obj => obj.id);
         const groupCount = canvasObjects.filter(obj => obj.type === 'group').length + 1;
+        
+        // FIXED: When grouping, delete children's keyframes to prevent misalignment
+        setKeyframes(prev => {
+          const updated = { ...prev };
+          // Delete all children keyframes
+          childIds.forEach(childId => {
+            delete updated[childId];
+          });
+          // Add empty keyframes for group
+          updated[group.id] = [];
+          return updated;
+        });
         
         setCanvasObjects(prev => [...prev, {
           id: group.id,
@@ -420,7 +435,6 @@ useEffect(() => {
           children: childIds
         }]);
         
-        setKeyframes(prev => ({ ...prev, [group.id]: [] }));
         setSelectedObject(group.id);
       }
       return;
@@ -434,12 +448,14 @@ useEffect(() => {
       const group = fabricCanvas.getObjects().find(obj => obj.id === selectedObject);
       if (!group || group.type !== 'group') return;
 
-      // FIXED: Proper ungrouping with absolute positioning
+      // Get group items
       const items = group._objects || [];
       const groupTransform = group.calcTransformMatrix();
       
+      // Remove group from canvas
       fabricCanvas.remove(group);
       
+      // Add children back with absolute positions
       items.forEach(item => {
         // Calculate absolute position
         const point = fabric.util.transformPoint(
@@ -468,13 +484,16 @@ useEffect(() => {
 
       fabricCanvas.renderAll();
 
-      // FIXED: Keep children in canvas objects, only remove group
+      // Remove group from state (children remain)
       setCanvasObjects(prev => prev.filter(obj => obj.id !== selectedObject));
+      
+      // Remove group keyframes
       setKeyframes(prev => {
         const updated = { ...prev };
         delete updated[selectedObject];
         return updated;
       });
+      
       setSelectedObject(null);
       return;
     }

@@ -88,6 +88,8 @@ const Toolbar = () => {
     const group = new fabric.Group(activeObjects, {
       id: `group_${Date.now()}`,
     });
+    
+    const childIds = activeObjects.map(obj => obj.id);
 
     // Remove individual objects from canvas
     activeObjects.forEach(obj => fabricCanvas.remove(obj));
@@ -98,8 +100,19 @@ const Toolbar = () => {
     fabricCanvas.renderAll();
 
     // Update state
-    const childIds = activeObjects.map(obj => obj.id);
     const groupCount = canvasObjects.filter(obj => obj.type === 'group').length + 1;
+    
+    // FIXED: Delete children keyframes when grouping
+    setKeyframes(prev => {
+      const updated = { ...prev };
+      // Delete all children keyframes
+      childIds.forEach(childId => {
+        delete updated[childId];
+      });
+      // Add empty keyframes for group
+      updated[group.id] = [];
+      return updated;
+    });
     
     setCanvasObjects(prev => [...prev, {
       id: group.id,
@@ -108,7 +121,6 @@ const Toolbar = () => {
       children: childIds
     }]);
     
-    setKeyframes(prev => ({ ...prev, [group.id]: [] }));
     setSelectedObject(group.id);
   };
 
@@ -118,16 +130,16 @@ const Toolbar = () => {
     const group = fabricCanvas.getObjects().find(obj => obj.id === selectedObject);
     if (!group || group.type !== 'group') return;
 
-    // FIXED: Proper ungrouping with absolute positioning
+    // Get items and transform
     const items = group._objects || [];
     const groupTransform = group.calcTransformMatrix();
     
-    // Remove group from canvas first
+    // Remove group from canvas
     fabricCanvas.remove(group);
 
-    // Add children back to canvas with absolute positions
+    // Add children back with absolute positions
     items.forEach((item) => {
-      // Calculate absolute position using transform matrix
+      // Calculate absolute position
       const point = fabric.util.transformPoint(
         { x: item.left, y: item.top },
         groupTransform
@@ -154,8 +166,10 @@ const Toolbar = () => {
 
     fabricCanvas.renderAll();
 
-    // FIXED: Keep children in canvas objects, only remove group
+    // Remove group from state (children remain)
     setCanvasObjects(prev => prev.filter(obj => obj.id !== selectedObject));
+    
+    // Remove group keyframes
     setKeyframes(prev => {
       const updated = { ...prev };
       delete updated[selectedObject];
@@ -181,7 +195,6 @@ const Toolbar = () => {
 
     activeObjects.forEach(fabricObject => {
       if (fabricObject && fabricObject.id) {
-        // If deleting a group, also delete its children from state
         const objectData = canvasObjects.find(obj => obj.id === fabricObject.id);
         
         fabricCanvas.remove(fabricObject);

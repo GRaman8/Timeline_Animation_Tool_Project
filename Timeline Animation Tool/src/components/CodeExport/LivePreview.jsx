@@ -1,8 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { Box, Paper, Typography } from '@mui/material';
 import gsap from 'gsap';
-import { useCanvasObjects, useKeyframes, useDuration, useFabricCanvas, useLoopPlayback } from '../../store/hooks';
-import { findFabricObjectById } from '../../utils/fabricHelpers';
+import { useCanvasObjects, useKeyframes, useDuration, useFabricCanvas } from '../../store/hooks';
 import { CANVAS_WIDTH, CANVAS_HEIGHT } from '../Canvas/Canvas';
 
 /**
@@ -27,7 +26,7 @@ const fabricPathToSVGPath = (pathArray) => {
 };
 
 /**
- * Get element size for offset calculation.
+ * Get element offset
  */
 const getOffsets = (obj) => {
   if (obj.type === 'rectangle' || obj.type === 'circle') {
@@ -41,7 +40,6 @@ const LivePreview = () => {
   const [keyframes] = useKeyframes();
   const [duration] = useDuration();
   const [fabricCanvas] = useFabricCanvas();
-  const [loopPlayback] = useLoopPlayback();
   const containerRef = useRef(null);
   const timelineRef = useRef(null);
 
@@ -56,9 +54,8 @@ const LivePreview = () => {
       timelineRef.current.kill();
     }
     
-    // Create timeline with loop setting
-    const repeatValue = loopPlayback ? -1 : 0;
-    timelineRef.current = gsap.timeline({ repeat: repeatValue });
+    // FIXED: Always loop in live preview (repeat: -1)
+    timelineRef.current = gsap.timeline({ repeat: -1 });
 
     // Identify group children
     const groupChildren = new Set();
@@ -84,20 +81,22 @@ const LivePreview = () => {
         groupEl.style.transformOrigin = 'center center';
         containerRef.current.appendChild(groupEl);
 
-        // Create children inside group
-        if (obj.children) {
-          obj.children.forEach(childId => {
-            const childObj = canvasObjects.find(o => o.id === childId);
-            if (!childObj) return;
-            
-            const childKeyframes = keyframes[childId] || [];
-            if (childKeyframes.length === 0) return;
+        // FIXED: Get children from Fabric.js
+        if (obj.children && fabricCanvas) {
+          const fabricGroup = fabricCanvas.getObjects().find(o => o.id === obj.id);
+          
+          if (fabricGroup && fabricGroup._objects) {
+            fabricGroup._objects.forEach((fabricChild) => {
+              const childId = fabricChild.id;
+              const childObj = canvasObjects.find(o => o.id === childId);
+              if (!childObj) return;
 
-            const childEl = createChildElement(childObj, childKeyframes, fabricCanvas);
-            if (childEl) {
-              groupEl.appendChild(childEl);
-            }
-          });
+              const childEl = createChildElementFromFabric(fabricChild, childObj);
+              if (childEl) {
+                groupEl.appendChild(childEl);
+              }
+            });
+          }
         }
 
         // Animate the group
@@ -124,7 +123,7 @@ const LivePreview = () => {
         timelineRef.current.kill();
       }
     };
-  }, [canvasObjects, keyframes, duration, fabricCanvas, loopPlayback]);
+  }, [canvasObjects, keyframes, duration, fabricCanvas]);
 
   return (
     <Paper sx={{ p: 2, mt: 2 }}>
@@ -132,8 +131,7 @@ const LivePreview = () => {
         Live Preview (GSAP)
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        This preview uses GSAP and matches the exported code exactly
-        {loopPlayback ? ' • Loop: ENABLED ♾️' : ' • Loop: DISABLED ▶️'}
+        This preview always loops to help you review your animation • Loop: ENABLED ♾️
       </Typography>
       <Box
         ref={containerRef}
@@ -152,34 +150,58 @@ const LivePreview = () => {
 };
 
 /**
- * Create a child element for a group
+ * Create child element from Fabric.js object
  */
-const createChildElement = (childObj, childKeyframes, fabricCanvas) => {
-  if (childKeyframes.length === 0) return null;
-
-  const firstKf = childKeyframes[0];
-  const offset = getOffsets(childObj);
-
+const createChildElementFromFabric = (fabricChild, childObj) => {
   const el = document.createElement('div');
-  el.id = childObj.id;
+  el.id = fabricChild.id;
   el.style.position = 'absolute';
   el.style.transformOrigin = 'center center';
-  el.style.left = (firstKf.properties.x + offset.x) + 'px';
-  el.style.top = (firstKf.properties.y + offset.y) + 'px';
+  
+  // Get position relative to group
+  const relLeft = fabricChild.left || 0;
+  const relTop = fabricChild.top || 0;
+  const childScaleX = fabricChild.scaleX || 1;
+  const childScaleY = fabricChild.scaleY || 1;
+  const childAngle = fabricChild.angle || 0;
+  
+  el.style.left = relLeft + 'px';
+  el.style.top = relTop + 'px';
+  el.style.transform = `scale(${childScaleX}, ${childScaleY}) rotate(${childAngle}deg)`;
 
-  if (childObj.type === 'rectangle') {
+  if (fabricChild.type === 'path') {
+    // Create SVG for path
+    const pathString = fabricPathToSVGPath(fabricChild.path);
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.style.position = 'absolute';
+    svg.style.left = '0';
+    svg.style.top = '0';
+    svg.style.overflow = 'visible';
+    svg.style.pointerEvents = 'none';
+    svg.setAttribute('width', CANVAS_WIDTH);
+    svg.setAttribute('height', CANVAS_HEIGHT);
+    
+    const pathEl = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    pathEl.setAttribute('d', pathString);
+    pathEl.setAttribute('stroke', fabricChild.stroke || '#000000');
+    pathEl.setAttribute('stroke-width', fabricChild.strokeWidth || 3);
+    pathEl.setAttribute('fill', 'none');
+    pathEl.setAttribute('stroke-linecap', 'round');
+    pathEl.setAttribute('stroke-linejoin', 'round');
+    
+    svg.appendChild(pathEl);
+    el.appendChild(svg);
+  } else if (fabricChild.type === 'rectangle') {
     el.style.width = '100px';
     el.style.height = '100px';
     el.style.backgroundColor = '#3b82f6';
-  } else if (childObj.type === 'circle') {
+  } else if (fabricChild.type === 'circle') {
     el.style.width = '100px';
     el.style.height = '100px';
     el.style.borderRadius = '50%';
     el.style.backgroundColor = '#ef4444';
-  } else if (childObj.type === 'text') {
-    const fabricObject = findFabricObjectById(fabricCanvas, childObj.id);
-    const textContent = fabricObject?.text || childObj.textContent || 'Text';
-    el.textContent = textContent;
+  } else if (fabricChild.type === 'text') {
+    el.textContent = fabricChild.text || 'Text';
     el.style.fontSize = '24px';
     el.style.color = '#000000';
     el.style.whiteSpace = 'nowrap';
@@ -243,7 +265,8 @@ const createRegularElement = (obj, objKeyframes, fabricCanvas) => {
     el.style.borderRadius = '50%';
     el.style.backgroundColor = '#ef4444';
   } else if (obj.type === 'text') {
-    const fabricObject = findFabricObjectById(fabricCanvas, obj.id);
+    // Get text from Fabric.js if available
+    const fabricObject = fabricCanvas?.getObjects().find(o => o.id === obj.id);
     const textContent = fabricObject?.text || obj.textContent || 'Text';
     el.textContent = textContent;
     el.style.fontSize = '24px';
@@ -274,7 +297,7 @@ const animatePathElement = (obj, objKeyframes, el, timeline) => {
     opacity: firstKf.properties.opacity,
   });
 
-  // Animate using DELTA from baseline
+  // Animate
   for (let i = 1; i < objKeyframes.length; i++) {
     const prevKf = objKeyframes[i - 1];
     const currKf = objKeyframes[i];

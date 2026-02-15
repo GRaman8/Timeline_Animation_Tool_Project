@@ -18,22 +18,28 @@ import {
   Download, 
   Close,
   Code,
-  Preview
 } from '@mui/icons-material';
 import { generateAnimationCode, downloadAllFiles, copyToClipboard } from '../../utils/codeGenerator';
-import { useCanvasObjects, useKeyframes, useDuration, useLoopPlayback } from '../../store/hooks';
+import { useCanvasObjects, useKeyframes, useDuration, useLoopPlayback, useFabricCanvas } from '../../store/hooks';
 
 const CodeExportDialog = ({ open, onClose }) => {
   const [canvasObjects] = useCanvasObjects();
   const [keyframes] = useKeyframes();
   const [duration] = useDuration();
-  const [loopPlayback] = useLoopPlayback(); // Get loop state
+  const [loopPlayback] = useLoopPlayback();
+  const [fabricCanvas] = useFabricCanvas(); // ADDED: Get fabricCanvas
   const [currentTab, setCurrentTab] = useState(0);
   const [snackbarOpen, setSnackbarOpen] = useState(false);
   const [snackbarMessage, setSnackbarMessage] = useState('');
 
-  // Pass loopPlayback to code generator
-  const { html, css, javascript } = generateAnimationCode(canvasObjects, keyframes, duration, loopPlayback);
+  // FIXED: Pass fabricCanvas to code generator
+  const { html, css, javascript } = generateAnimationCode(
+    canvasObjects, 
+    keyframes, 
+    duration, 
+    loopPlayback,
+    fabricCanvas // Pass fabricCanvas for group child positions
+  );
 
   const handleCopy = async (content, label) => {
     const success = await copyToClipboard(content);
