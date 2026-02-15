@@ -18,6 +18,7 @@ import {
   Brush as BrushIcon,
   GroupAdd as GroupIcon,
   GroupRemove as UngroupIcon,
+  GpsFixed as AnchorIcon,
 } from '@mui/icons-material';
 
 import { 
@@ -27,13 +28,11 @@ import {
   useKeyframes,
   useHasActiveSelection,
   useDrawingMode,
+  useAnchorEditMode,
 } from '../../store/hooks';
 
-import { createFabricObject } from '../../utils/fabricHelpers';
+import { createFabricObject, ungroupFabricGroup } from '../../utils/fabricHelpers';
 import * as fabric from 'fabric';
-
-import { GpsFixed as AnchorIcon } from '@mui/icons-material';
-import { useAnchorEditMode } from '../../store/hooks';
 
 const Toolbar = () => {
   const [selectedObject, setSelectedObject] = useSelectedObject();
@@ -42,7 +41,6 @@ const Toolbar = () => {
   const [keyframes, setKeyframes] = useKeyframes();
   const [hasActiveSelection] = useHasActiveSelection();
   const [drawingMode, setDrawingMode] = useDrawingMode();
-
   const [anchorEditMode, setAnchorEditMode] = useAnchorEditMode();
 
   // Check if multiple objects are selected (for group button)
@@ -102,14 +100,12 @@ const Toolbar = () => {
     // Update state
     const groupCount = canvasObjects.filter(obj => obj.type === 'group').length + 1;
     
-    // FIXED: Delete children keyframes when grouping
+    // Delete children keyframes when grouping
     setKeyframes(prev => {
       const updated = { ...prev };
-      // Delete all children keyframes
       childIds.forEach(childId => {
         delete updated[childId];
       });
-      // Add empty keyframes for group
       updated[group.id] = [];
       return updated;
     });
@@ -124,59 +120,37 @@ const Toolbar = () => {
     setSelectedObject(group.id);
   };
 
+  // FIXED: Use ungroupFabricGroup helper for proper coordinate handling
   const ungroupObjects = () => {
     if (!fabricCanvas || !selectedObject) return;
 
     const group = fabricCanvas.getObjects().find(obj => obj.id === selectedObject);
     if (!group || group.type !== 'group') return;
 
-    // Get items and transform
-    const items = group._objects || [];
-    const groupTransform = group.calcTransformMatrix();
-    
-    // Remove group from canvas
-    fabricCanvas.remove(group);
+    // Use the helper that properly handles Fabric.js 6 ungrouping
+    const restoredItems = ungroupFabricGroup(fabricCanvas, group);
 
-    // Add children back with absolute positions
-    items.forEach((item) => {
-      // Calculate absolute position
-      const point = fabric.util.transformPoint(
-        { x: item.left, y: item.top },
-        groupTransform
-      );
+    if (restoredItems.length > 0) {
+      // Remove group from state (children remain)
+      setCanvasObjects(prev => prev.filter(obj => obj.id !== selectedObject));
       
-      // Calculate absolute scale
-      const absoluteScaleX = (group.scaleX || 1) * (item.scaleX || 1);
-      const absoluteScaleY = (group.scaleY || 1) * (item.scaleY || 1);
-      
-      // Calculate absolute rotation
-      const absoluteAngle = (group.angle || 0) + (item.angle || 0);
-      
-      item.set({
-        left: point.x,
-        top: point.y,
-        scaleX: absoluteScaleX,
-        scaleY: absoluteScaleY,
-        angle: absoluteAngle,
+      // Remove group keyframes
+      setKeyframes(prev => {
+        const updated = { ...prev };
+        delete updated[selectedObject];
+        return updated;
       });
       
-      item.setCoords();
-      fabricCanvas.add(item);
-    });
-
-    fabricCanvas.renderAll();
-
-    // Remove group from state (children remain)
-    setCanvasObjects(prev => prev.filter(obj => obj.id !== selectedObject));
-    
-    // Remove group keyframes
-    setKeyframes(prev => {
-      const updated = { ...prev };
-      delete updated[selectedObject];
-      return updated;
-    });
-    
-    setSelectedObject(null);
+      setSelectedObject(null);
+      
+      // Ensure all canvas objects are visible and selectable
+      fabricCanvas.forEachObject(obj => {
+        obj.visible = true;
+        obj.selectable = true;
+        obj.evented = true;
+      });
+      fabricCanvas.requestRenderAll();
+    }
   };
 
   const deleteObject = () => {

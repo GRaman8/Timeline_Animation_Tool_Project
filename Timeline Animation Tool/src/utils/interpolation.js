@@ -1,4 +1,3 @@
-
 import { applyEasing } from './easing';
 
 /**
@@ -49,11 +48,15 @@ export const interpolateProperties = (beforeKf, afterKf, time, easingType = 'lin
     scaleY: lerp(beforeKf.properties.scaleY, afterKf.properties.scaleY, t),
     rotation: lerp(beforeKf.properties.rotation, afterKf.properties.rotation, t),
     opacity: lerp(beforeKf.properties.opacity, afterKf.properties.opacity, t),
-    anchorX: lerp(beforeKf.properties.anchorX || 0.5, afterKf.properties.anchorX || 0.5, t), // NEW
-    anchorY: lerp(beforeKf.properties.anchorY || 0.5, afterKf.properties.anchorY || 0.5, t), // NEW
   };
 };
 
+/**
+ * FIXED: Do NOT change originX/originY during animation.
+ * Changing origin from 'center' (string) to 0.5 (number) causes Fabric.js
+ * to recalculate the object's position, resulting in a visible jump/misalignment.
+ * Origin should only be changed explicitly by the anchor point editor.
+ */
 export const applyPropertiesToFabricObject = (fabricObject, properties) => {
   if (!fabricObject || !properties) return;
 
@@ -64,8 +67,7 @@ export const applyPropertiesToFabricObject = (fabricObject, properties) => {
     scaleY: properties.scaleY,
     angle: properties.rotation,
     opacity: properties.opacity,
-    originX: properties.anchorX || 0.5, // NEW
-    originY: properties.anchorY || 0.5, // NEW
+    // DO NOT set originX/originY here - it causes position jumps
   });
 };
 

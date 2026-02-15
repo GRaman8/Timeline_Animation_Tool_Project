@@ -1,6 +1,6 @@
 /**
  * Generate HTML, CSS, and JavaScript code from animation data
- * FULLY FIXED VERSION - Handles groups correctly
+ * FIXED: Proper coordinate handling for groups and paths
  */
 
 const CANVAS_WIDTH = 1400;
@@ -25,16 +25,6 @@ const fabricPathToSVGPath = (pathArray) => {
   });
   
   return pathString.trim();
-};
-
-/**
- * Get CSS offset for Fabric center-point to CSS top-left conversion
- */
-const getOffsets = (obj) => {
-  if (obj.type === 'rectangle' || obj.type === 'circle') {
-    return { x: -50, y: -50 };
-  }
-  return { x: 0, y: 0 };
 };
 
 // Accept loopPlayback and fabricCanvas
@@ -66,7 +56,7 @@ const generateHTML = () => {
 };
 
 /**
- * Generate CSS - FIXED: Skip children, they're inside groups
+ * Generate CSS - Skip children (styled in JS), use center-origin offsets
  */
 const generateCSS = (canvasObjects, keyframes) => {
   let css = `/* Generated Animation Styles */
@@ -98,25 +88,24 @@ body {
     }
   });
 
-  // Generate CSS only for top-level objects
+  // Generate CSS only for top-level non-group, non-path objects
   canvasObjects.forEach(obj => {
-    // FIXED: Skip children - they're styled inline in JavaScript
     if (groupChildren.has(obj.id)) return;
     
     const objKeyframes = keyframes[obj.id] || [];
     if (objKeyframes.length === 0) return;
 
-    // Skip paths - they don't need CSS
-    if (obj.type === 'path') return;
+    // Skip paths and groups - they're handled in JavaScript
+    if (obj.type === 'path' || obj.type === 'group') return;
 
     const firstKeyframe = objKeyframes[0];
     const props = firstKeyframe.properties;
-    const offset = obj.type === 'group' ? { x: 0, y: 0 } : getOffsets(obj);
 
+    // FIXED: Use -50 offset for center-origin shapes
     css += `#${obj.id} {
     position: absolute;
-    left: ${(props.x + offset.x).toFixed(2)}px;
-    top: ${(props.y + offset.y).toFixed(2)}px;
+    left: ${(props.x - 50).toFixed(2)}px;
+    top: ${(props.y - 50).toFixed(2)}px;
     transform: scale(${props.scaleX}, ${props.scaleY}) rotate(${props.rotation}deg);
     transform-origin: center center;
     opacity: ${props.opacity};
@@ -149,7 +138,7 @@ body {
 };
 
 /**
- * Generate JavaScript - FIXED: Get child positions from Fabric.js
+ * Generate JavaScript - FIXED: Proper group/path coordinate handling
  */
 const generateJavaScript = (canvasObjects, keyframes, duration, loopPlayback, fabricCanvas) => {
   const repeatValue = loopPlayback ? -1 : 0;
@@ -183,17 +172,20 @@ document.addEventListener('DOMContentLoaded', () => {
     if (groupChildren.has(obj.id)) return;
 
     if (obj.type === 'group') {
-      // Create group container
+      // FIXED: Group container - 0x0 with overflow:visible, transformOrigin at 0,0
       js += `    // Create ${obj.name} (Group)
     const ${obj.id} = document.createElement('div');
     ${obj.id}.id = '${obj.id}';
     ${obj.id}.style.position = 'absolute';
-    ${obj.id}.style.transformOrigin = 'center center';
+    ${obj.id}.style.width = '0px';
+    ${obj.id}.style.height = '0px';
+    ${obj.id}.style.overflow = 'visible';
+    ${obj.id}.style.transformOrigin = '0px 0px';
     container.appendChild(${obj.id});
     
 `;
       
-      // FIXED: Get child positions from Fabric.js if available
+      // FIXED: Create children with proper coordinate handling
       if (obj.children && fabricCanvas) {
         const fabricGroup = fabricCanvas.getObjects().find(o => o.id === obj.id);
         
@@ -203,50 +195,100 @@ document.addEventListener('DOMContentLoaded', () => {
             const childObj = canvasObjects.find(o => o.id === childId);
             if (!childObj) return;
 
-            // Get child's position relative to group
             const relLeft = fabricChild.left || 0;
             const relTop = fabricChild.top || 0;
             const childScaleX = fabricChild.scaleX || 1;
             const childScaleY = fabricChild.scaleY || 1;
             const childAngle = fabricChild.angle || 0;
 
-            js += `    // Create ${childObj.name} (child)
+            if (fabricChild.type === 'path') {
+              // FIXED: Path children use pathOffset for correct SVG positioning
+              const pathString = fabricPathToSVGPath(fabricChild.path);
+              const pathOffsetX = fabricChild.pathOffset?.x || 0;
+              const pathOffsetY = fabricChild.pathOffset?.y || 0;
+              const tx = relLeft - pathOffsetX * childScaleX;
+              const ty = relTop - pathOffsetY * childScaleY;
+
+              js += `    // Create ${childObj.name} (path child)
+    (function() {
+        var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.style.position = 'absolute';
+        svg.style.left = '0';
+        svg.style.top = '0';
+        svg.style.overflow = 'visible';
+        svg.style.pointerEvents = 'none';
+        svg.setAttribute('width', '1');
+        svg.setAttribute('height', '1');
+        
+        var g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        g.setAttribute('transform', 'translate(${tx.toFixed(2)}, ${ty.toFixed(2)}) scale(${childScaleX}, ${childScaleY})');
+        
+        var pathEl = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        pathEl.setAttribute('d', '${pathString}');
+        pathEl.setAttribute('stroke', '${fabricChild.stroke || '#000000'}');
+        pathEl.setAttribute('stroke-width', '${fabricChild.strokeWidth || 3}');
+        pathEl.setAttribute('fill', 'none');
+        pathEl.setAttribute('stroke-linecap', 'round');
+        pathEl.setAttribute('stroke-linejoin', 'round');
+        
+        g.appendChild(pathEl);
+        svg.appendChild(g);
+        ${obj.id}.appendChild(svg);
+    })();
+    
+`;
+            } else {
+              // FIXED: Solid children use center-origin offset
+              let childWidth = 100;
+              let childHeight = 100;
+              
+              js += `    // Create ${childObj.name} (child)
     const ${childId} = document.createElement('div');
     ${childId}.id = '${childId}';
     ${childId}.style.position = 'absolute';
     ${childId}.style.transformOrigin = 'center center';
-    ${childId}.style.left = '${relLeft.toFixed(2)}px';
-    ${childId}.style.top = '${relTop.toFixed(2)}px';
-    ${childId}.style.transform = 'scale(${childScaleX}, ${childScaleY}) rotate(${childAngle}deg)';
 `;
 
-            if (fabricChild.type === 'path') {
-              // SVG path
-              const pathString = fabricPathToSVGPath(fabricChild.path);
-              js += `    ${childId}.innerHTML = '<svg style="position:absolute;left:0;top:0;overflow:visible;pointer-events:none;" width="${CANVAS_WIDTH}" height="${CANVAS_HEIGHT}"><path d="${pathString}" stroke="${fabricChild.stroke}" stroke-width="${fabricChild.strokeWidth}" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+              if (fabricChild.type === 'rect' || fabricChild.type === 'rectangle') {
+                childWidth = (fabricChild.width || 100) * childScaleX;
+                childHeight = (fabricChild.height || 100) * childScaleY;
+                js += `    ${childId}.style.width = '${childWidth.toFixed(2)}px';
+    ${childId}.style.height = '${childHeight.toFixed(2)}px';
+    ${childId}.style.backgroundColor = '${fabricChild.fill || '#3b82f6'}';
 `;
-            } else if (fabricChild.type === 'rectangle') {
-              js += `    ${childId}.style.width = '100px';
-    ${childId}.style.height = '100px';
-    ${childId}.style.backgroundColor = '#3b82f6';
-`;
-            } else if (fabricChild.type === 'circle') {
-              js += `    ${childId}.style.width = '100px';
-    ${childId}.style.height = '100px';
+              } else if (fabricChild.type === 'circle') {
+                const radius = fabricChild.radius || 50;
+                childWidth = radius * 2 * childScaleX;
+                childHeight = radius * 2 * childScaleY;
+                js += `    ${childId}.style.width = '${childWidth.toFixed(2)}px';
+    ${childId}.style.height = '${childHeight.toFixed(2)}px';
     ${childId}.style.borderRadius = '50%';
-    ${childId}.style.backgroundColor = '#ef4444';
+    ${childId}.style.backgroundColor = '${fabricChild.fill || '#ef4444'}';
 `;
-            } else if (fabricChild.type === 'text') {
-              js += `    ${childId}.textContent = '${fabricChild.text || 'Text'}';
-    ${childId}.style.fontSize = '24px';
-    ${childId}.style.color = '#000000';
+              } else if (fabricChild.type === 'text') {
+                childWidth = (fabricChild.width || 50) * childScaleX;
+                childHeight = (fabricChild.height || 24) * childScaleY;
+                js += `    ${childId}.textContent = '${fabricChild.text || 'Text'}';
+    ${childId}.style.fontSize = '${((fabricChild.fontSize || 24) * childScaleY).toFixed(2)}px';
+    ${childId}.style.color = '${fabricChild.fill || '#000000'}';
     ${childId}.style.whiteSpace = 'nowrap';
 `;
-            }
-            
-            js += `    ${obj.id}.appendChild(${childId});
+              }
+
+              // FIXED: Position child CENTER at (relLeft, relTop)
+              const cssLeft = relLeft - childWidth / 2;
+              const cssTop = relTop - childHeight / 2;
+              js += `    ${childId}.style.left = '${cssLeft.toFixed(2)}px';
+    ${childId}.style.top = '${cssTop.toFixed(2)}px';
+`;
+              if (childAngle) {
+                js += `    ${childId}.style.transform = 'rotate(${childAngle}deg)';
+`;
+              }
+              js += `    ${obj.id}.appendChild(${childId});
     
 `;
+            }
           });
         }
       }
@@ -281,17 +323,16 @@ document.addEventListener('DOMContentLoaded', () => {
 `;
 
     } else {
-      // Regular elements
+      // FIXED: Regular elements use -50 offset for center origin
       const firstKf = objKeyframes[0];
-      const offset = getOffsets(obj);
       
       js += `    // Create ${obj.name}
     const ${obj.id} = document.createElement('div');
     ${obj.id}.id = '${obj.id}';
     ${obj.id}.style.position = 'absolute';
     ${obj.id}.style.transformOrigin = 'center center';
-    ${obj.id}.style.left = '${(firstKf.properties.x + offset.x).toFixed(2)}px';
-    ${obj.id}.style.top = '${(firstKf.properties.y + offset.y).toFixed(2)}px';
+    ${obj.id}.style.left = '${(firstKf.properties.x - 50).toFixed(2)}px';
+    ${obj.id}.style.top = '${(firstKf.properties.y - 50).toFixed(2)}px';
 `;
 
       if (obj.type === 'rectangle') {
@@ -351,12 +392,10 @@ document.addEventListener('DOMContentLoaded', () => {
     
 `;
       }
-    } else {
-      const offset = obj.type === 'group' ? { x: 0, y: 0 } : getOffsets(obj);
-
+    } else if (obj.type === 'group') {
+      // FIXED: Group animation uses center position directly (no offset needed, group div origin IS center)
       js += `    // Animate ${obj.name}
 `;
-
       for (let i = 1; i < objKeyframes.length; i++) {
         const prevKf = objKeyframes[i - 1];
         const currKf = objKeyframes[i];
@@ -365,8 +404,31 @@ document.addEventListener('DOMContentLoaded', () => {
 
         js += `    tl.to('#${obj.id}', {
         duration: ${animDur.toFixed(2)},
-        left: '${(currKf.properties.x + offset.x).toFixed(2)}px',
-        top: '${(currKf.properties.y + offset.y).toFixed(2)}px',
+        left: '${currKf.properties.x.toFixed(2)}px',
+        top: '${currKf.properties.y.toFixed(2)}px',
+        scaleX: ${currKf.properties.scaleX.toFixed(2)},
+        scaleY: ${currKf.properties.scaleY.toFixed(2)},
+        rotation: ${currKf.properties.rotation.toFixed(2)},
+        opacity: ${currKf.properties.opacity.toFixed(2)},
+        ease: '${easing}'
+    }, ${prevKf.time.toFixed(2)});
+    
+`;
+      }
+    } else {
+      // FIXED: Regular elements use -50 offset in animation too
+      js += `    // Animate ${obj.name}
+`;
+      for (let i = 1; i < objKeyframes.length; i++) {
+        const prevKf = objKeyframes[i - 1];
+        const currKf = objKeyframes[i];
+        const animDur = currKf.time - prevKf.time;
+        const easing = mapEasingToGSAP(currKf.easing || 'linear');
+
+        js += `    tl.to('#${obj.id}', {
+        duration: ${animDur.toFixed(2)},
+        left: '${(currKf.properties.x - 50).toFixed(2)}px',
+        top: '${(currKf.properties.y - 50).toFixed(2)}px',
         scaleX: ${currKf.properties.scaleX.toFixed(2)},
         scaleY: ${currKf.properties.scaleY.toFixed(2)},
         rotation: ${currKf.properties.rotation.toFixed(2)},

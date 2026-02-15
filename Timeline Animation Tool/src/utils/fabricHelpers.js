@@ -8,7 +8,7 @@ export const createFabricObject = (type, id) => {
     id,
     left: 100,
     top: 100,
-    originX: 'center', // Fabric uses center by default
+    originX: 'center',
     originY: 'center',
   };
 
@@ -77,7 +77,7 @@ export const createPathFromPoints = (points, id, settings) => {
     strokeLineCap: 'round',
     strokeLineJoin: 'round',
     selectable: true,
-    originX: 'center', // Use center origin like other objects
+    originX: 'center',
     originY: 'center',
   });
 
@@ -86,13 +86,12 @@ export const createPathFromPoints = (points, id, settings) => {
 
 /**
  * Extract properties from a Fabric.js object
- * Fabric.js stores positions based on origin (usually center)
- * We need to extract the actual position for animation
+ * FIXED: Don't extract anchorX/anchorY - origin should not be animated
+ * as changing it during playback causes position jumps.
 */
 export const extractPropertiesFromFabricObject = (fabricObject) => {
   if (!fabricObject) return null;
 
-  // All objects use center origin in Fabric.js
   const baseProps = {
     x: fabricObject.left || 0,
     y: fabricObject.top || 0,
@@ -100,8 +99,6 @@ export const extractPropertiesFromFabricObject = (fabricObject) => {
     scaleY: fabricObject.scaleY || 1,
     rotation: fabricObject.angle || 0,
     opacity: fabricObject.opacity !== undefined ? fabricObject.opacity : 1,
-    anchorX: fabricObject.originX === 'center' ? 0.5 : (fabricObject.originX || 0.5), // NEW
-    anchorY: fabricObject.originY === 'center' ? 0.5 : (fabricObject.originY || 0.5), // NEW
   };
   
   // Include path-specific data for path objects
@@ -123,4 +120,63 @@ export const extractPropertiesFromFabricObject = (fabricObject) => {
 export const findFabricObjectById = (canvas, id) => {
   if (!canvas) return null;
   return canvas.getObjects().find(obj => obj.id === id) || null;
+};
+
+/**
+ * FIXED: Properly ungroup a Fabric.js group, returning children with absolute transforms.
+ * This handles Fabric.js 6's coordinate system correctly and clears group references.
+ */
+export const ungroupFabricGroup = (fabricCanvas, group) => {
+  if (!fabricCanvas || !group || group.type !== 'group') return [];
+
+  // CRITICAL: Copy all child data BEFORE modifying the group
+  const items = [...(group._objects || [])];
+  const groupMatrix = group.calcTransformMatrix();
+  
+  // Pre-calculate absolute transforms for each child
+  const childrenData = items.map(item => {
+    // Transform child's relative position to absolute canvas position
+    const point = fabric.util.transformPoint(
+      { x: item.left || 0, y: item.top || 0 },
+      groupMatrix
+    );
+    
+    return {
+      item,
+      absoluteLeft: point.x,
+      absoluteTop: point.y,
+      absoluteScaleX: (group.scaleX || 1) * (item.scaleX || 1),
+      absoluteScaleY: (group.scaleY || 1) * (item.scaleY || 1),
+      absoluteAngle: (group.angle || 0) + (item.angle || 0),
+      absoluteOpacity: (group.opacity !== undefined ? group.opacity : 1) * 
+                       (item.opacity !== undefined ? item.opacity : 1),
+    };
+  });
+
+  // Remove group from canvas
+  fabricCanvas.remove(group);
+
+  // Restore each child with absolute transforms
+  const restoredItems = [];
+  childrenData.forEach(({ item, absoluteLeft, absoluteTop, absoluteScaleX, absoluteScaleY, absoluteAngle, absoluteOpacity }) => {
+    // CRITICAL: Clear group reference so Fabric.js treats it as independent
+    item.group = undefined;
+    item.canvas = undefined;
+    
+    item.set({
+      left: absoluteLeft,
+      top: absoluteTop,
+      scaleX: absoluteScaleX,
+      scaleY: absoluteScaleY,
+      angle: absoluteAngle,
+      opacity: absoluteOpacity,
+    });
+    
+    item.setCoords();
+    fabricCanvas.add(item);
+    restoredItems.push(item);
+  });
+
+  fabricCanvas.requestRenderAll();
+  return restoredItems;
 };
