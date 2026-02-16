@@ -359,6 +359,16 @@ const Canvas = () => {
   // Keyboard shortcuts handler
   useEffect(() => {
     if (!fabricCanvas) return;
+    if (isInteracting) return;
+
+    // If there's a selected object, make sure it's active in the canvas
+    if (selectedObject && !isPlaying) {
+      const fabricObject = findFabricObjectById(fabricCanvas, selectedObject);
+      if (fabricObject && fabricCanvas.getActiveObject() !== fabricObject) {
+        fabricCanvas.setActiveObject(fabricObject);
+        fabricCanvas.renderAll();
+      }
+    }
 
     const handleKeyDown = (e) => {
       if (drawingMode) return;

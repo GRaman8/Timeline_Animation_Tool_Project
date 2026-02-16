@@ -310,6 +310,7 @@ const PropertiesPanel = () => {
             </Typography>
           </Paper>
         )}
+
       </Box>
     </Drawer>
   );
