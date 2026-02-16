@@ -1,13 +1,13 @@
 /**
  * Code Generator - Produces standalone HTML/CSS/JS animation
  * 
- * Coordinate system: ALL keyframe x/y values are CENTER coordinates
- * (since all Fabric.js objects including groups use originX:'center').
- * 
- * Anchor/pivot support: transform-origin is set per-element based on
- * stored anchorX/anchorY values. For paths, this requires computing
- * the pixel position using pathOffset + bounding box from the Fabric object.
+ * Rotation values are normalized to take the shortest angular path
+ * between consecutive keyframes. This prevents issues where Fabric.js
+ * stores 289° (= -71°) and GSAP would animate 289° clockwise instead
+ * of 71° counterclockwise.
  */
+
+import { normalizeKeyframeRotations } from './interpolation';
 
 const CANVAS_WIDTH = 1400;
 const CANVAS_HEIGHT = 800;
@@ -77,19 +77,22 @@ body {
 
   canvasObjects.forEach(obj => {
     if (groupChildren.has(obj.id)) return;
-    const objKeyframes = keyframes[obj.id] || [];
-    if (objKeyframes.length === 0) return;
+    const rawKeyframes = keyframes[obj.id] || [];
+    if (rawKeyframes.length === 0) return;
     if (obj.type === 'path' || obj.type === 'group') return;
 
+    const objKeyframes = normalizeKeyframeRotations(rawKeyframes);
     const firstKf = objKeyframes[0];
     const props = firstKf.properties;
     const anchorX = obj.anchorX ?? 0.5;
     const anchorY = obj.anchorY ?? 0.5;
+    const elWidth = 100;
+    const elHeight = 100;
 
     css += `#${obj.id} {
     position: absolute;
-    left: ${(props.x - 50).toFixed(2)}px;
-    top: ${(props.y - 50).toFixed(2)}px;
+    left: ${(props.x - anchorX * elWidth).toFixed(2)}px;
+    top: ${(props.y - anchorY * elHeight).toFixed(2)}px;
     transform-origin: ${(anchorX * 100).toFixed(0)}% ${(anchorY * 100).toFixed(0)}%;
     opacity: ${props.opacity};
 `;
@@ -129,12 +132,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // ========== CREATE AND INITIALIZE ELEMENTS ==========
   canvasObjects.forEach(obj => {
-    const objKeyframes = keyframes[obj.id] || [];
-    if (objKeyframes.length === 0) return;
+    const rawKeyframes = keyframes[obj.id] || [];
+    if (rawKeyframes.length === 0) return;
     if (groupChildren.has(obj.id)) return;
 
+    // Normalize rotation to shortest path
+    const objKeyframes = normalizeKeyframeRotations(rawKeyframes);
     const firstKf = objKeyframes[0];
 
     if (obj.type === 'group') {
@@ -146,12 +150,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // ========== ANIMATE ELEMENTS ==========
   canvasObjects.forEach(obj => {
-    const objKeyframes = keyframes[obj.id] || [];
-    if (objKeyframes.length < 2) return;
+    const rawKeyframes = keyframes[obj.id] || [];
+    if (rawKeyframes.length < 2) return;
     if (groupChildren.has(obj.id)) return;
 
+    // Normalize rotation to shortest path
+    const objKeyframes = normalizeKeyframeRotations(rawKeyframes);
+    
     js += `    // Animate ${obj.name}\n`;
 
     if (obj.type === 'path') {
@@ -175,7 +181,6 @@ const generateGroupCreation = (obj, firstKf, canvasObjects, fabricCanvas) => {
   const anchorX = obj.anchorX ?? 0.5;
   const anchorY = obj.anchorY ?? 0.5;
   
-  // Calculate pivot offset from group center
   let pivotOffsetX = 0;
   let pivotOffsetY = 0;
   if (fabricCanvas) {
@@ -209,7 +214,6 @@ const generateGroupCreation = (obj, firstKf, canvasObjects, fabricCanvas) => {
     
 `;
 
-  // Create children
   if (obj.children && fabricCanvas) {
     const fabricGroup = fabricCanvas.getObjects().find(o => o.id === obj.id);
     
@@ -325,21 +329,13 @@ const generateSolidChildCreation = (fabricChild, childObj, parentId, relLeft, re
 };
 
 // ========== STANDALONE PATH CREATION ==========
-/**
- * ANCHOR FIX: Calculate transform-origin for the SVG element.
- * 
- * The SVG spans the full canvas (0,0 to 1400,800).
- * Path data is in absolute SVG coordinates centered at pathOffset.
- * The pivot point in pixels = pathOffset + (anchor - 0.5) * objectSize.
- */
 const generatePathCreation = (obj, firstKf, fabricCanvas) => {
   const pathString = fabricPathToSVGPath(obj.pathData);
   
   const anchorX = obj.anchorX ?? 0.5;
   const anchorY = obj.anchorY ?? 0.5;
   
-  // Calculate pixel-precise transform-origin from Fabric object geometry
-  let transformOriginStr = '50% 50%'; // fallback
+  let transformOriginStr = '50% 50%';
   if (fabricCanvas) {
     const fabricObject = fabricCanvas.getObjects().find(o => o.id === obj.id);
     if (fabricObject) {
@@ -391,14 +387,16 @@ const generatePathCreation = (obj, firstKf, fabricCanvas) => {
 const generateRegularCreation = (obj, firstKf) => {
   const anchorX = obj.anchorX ?? 0.5;
   const anchorY = obj.anchorY ?? 0.5;
+  const elWidth = 100;
+  const elHeight = 100;
   
   let js = `    // Create ${obj.name}
     const ${obj.id} = document.createElement('div');
     ${obj.id}.id = '${obj.id}';
     ${obj.id}.style.position = 'absolute';
     ${obj.id}.style.transformOrigin = '${(anchorX * 100).toFixed(0)}% ${(anchorY * 100).toFixed(0)}%';
-    ${obj.id}.style.left = '${(firstKf.properties.x - 50).toFixed(2)}px';
-    ${obj.id}.style.top = '${(firstKf.properties.y - 50).toFixed(2)}px';
+    ${obj.id}.style.left = '${(firstKf.properties.x - anchorX * elWidth).toFixed(2)}px';
+    ${obj.id}.style.top = '${(firstKf.properties.y - anchorY * elHeight).toFixed(2)}px';
 `;
 
   if (obj.type === 'rectangle') {
@@ -485,6 +483,11 @@ const generateGroupAnimation = (obj, objKeyframes) => {
 };
 
 const generateRegularAnimation = (obj, objKeyframes) => {
+  const anchorX = obj.anchorX ?? 0.5;
+  const anchorY = obj.anchorY ?? 0.5;
+  const elWidth = 100;
+  const elHeight = 100;
+
   let js = '';
   for (let i = 1; i < objKeyframes.length; i++) {
     const prevKf = objKeyframes[i - 1];
@@ -493,8 +496,8 @@ const generateRegularAnimation = (obj, objKeyframes) => {
 
     js += `    tl.to('#${obj.id}', {
         duration: ${(currKf.time - prevKf.time).toFixed(2)},
-        left: '${(currKf.properties.x - 50).toFixed(2)}px',
-        top: '${(currKf.properties.y - 50).toFixed(2)}px',
+        left: '${(currKf.properties.x - anchorX * elWidth).toFixed(2)}px',
+        top: '${(currKf.properties.y - anchorY * elHeight).toFixed(2)}px',
         scaleX: ${currKf.properties.scaleX.toFixed(2)},
         scaleY: ${currKf.properties.scaleY.toFixed(2)},
         rotation: ${currKf.properties.rotation.toFixed(2)},

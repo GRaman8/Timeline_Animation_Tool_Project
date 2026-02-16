@@ -38,7 +38,6 @@ const PropertiesPanel = () => {
 
   const drawerWidth = 300;
 
-  // Update properties when time changes
   useEffect(() => {
     if (!selectedObject || !fabricCanvas) return;
 
@@ -63,9 +62,9 @@ const PropertiesPanel = () => {
   };
 
   /**
-   * Handle position change using center-based coordinates.
-   * Uses setPositionByOrigin so it works correctly regardless of
-   * the object's current origin setting (default center or custom anchor).
+   * Handle position change.
+   * Sets left/top directly — this is the origin point position.
+   * For center-origin: sets the center. For custom-anchor: sets the anchor.
    */
   const handlePositionChange = (axis, value) => {
     if (!selectedObject || !fabricCanvas) return;
@@ -76,17 +75,9 @@ const PropertiesPanel = () => {
     const numValue = parseFloat(value);
     if (isNaN(numValue)) return;
 
-    // Get current center, update the changed axis
-    const center = fabricObject.getCenterPoint();
-    if (axis === 'x') center.x = numValue;
-    else center.y = numValue;
-
-    // Place object so its CENTER is at the new position
-    fabricObject.setPositionByOrigin(
-      { x: center.x, y: center.y },
-      'center',
-      'center'
-    );
+    if (axis === 'x') fabricObject.set('left', numValue);
+    else fabricObject.set('top', numValue);
+    
     fabricObject.setCoords();
     fabricCanvas.renderAll();
 
@@ -130,7 +121,6 @@ const PropertiesPanel = () => {
     if (props) setProperties(props);
   };
 
-  // Anchor info
   const objectData = canvasObjects.find(obj => obj.id === selectedObject);
   const anchorX = objectData?.anchorX ?? 0.5;
   const anchorY = objectData?.anchorY ?? 0.5;
@@ -223,7 +213,7 @@ const PropertiesPanel = () => {
 
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                 <TextField
-                  label="X Position (center)"
+                  label={hasCustomAnchor ? "X Position (pivot)" : "X Position (center)"}
                   type="number"
                   value={Math.round(properties.x)}
                   size="small"
@@ -233,7 +223,7 @@ const PropertiesPanel = () => {
                 />
                 
                 <TextField
-                  label="Y Position (center)"
+                  label={hasCustomAnchor ? "Y Position (pivot)" : "Y Position (center)"}
                   type="number"
                   value={Math.round(properties.y)}
                   size="small"
@@ -298,10 +288,12 @@ const PropertiesPanel = () => {
                 sx={{ p: 2, bgcolor: 'info.light', color: 'info.contrastText' }}
               >
                 <Typography variant="body2" sx={{ lineHeight: 1.6 }}>
-                  💡 <strong>Tip:</strong> X/Y values represent the object's center position. 
-                  Change values here or drag objects on the canvas. Click "Add Keyframe" to record.
+                  💡 <strong>Tip:</strong> {hasCustomAnchor 
+                    ? 'X/Y show the pivot point position. The object rotates around this point.' 
+                    : 'X/Y show the center position. Drag objects or type values, then click "Add Keyframe" to record.'
+                  }
                   {hasCustomAnchor && (
-                    <><br /><br />🎯 Custom pivot at ({(anchorX*100).toFixed(0)}%, {(anchorY*100).toFixed(0)}%). 
+                    <><br /><br />🎯 Pivot at ({(anchorX*100).toFixed(0)}%, {(anchorY*100).toFixed(0)}%). 
                     The rotation handle has moved to this point.</>
                   )}
                 </Typography>

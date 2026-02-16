@@ -83,17 +83,24 @@ export const createPathFromPoints = (points, id, settings) => {
 
 /**
  * Extract properties from a Fabric.js object.
- * Uses getCenterPoint() to always get the TRUE visual center,
- * regardless of what originX/originY is set to.
+ * 
+ * USES left/top DIRECTLY — this is the ORIGIN POINT position:
+ * - For center-origin objects: left/top = center (same as getCenterPoint)
+ * - For custom-anchor objects: left/top = anchor/pivot position
+ * 
+ * WHY THIS MATTERS FOR PENDULUM/ROTATION:
+ * When rotating around a custom anchor, the anchor stays fixed but the
+ * center moves. getCenterPoint() would capture that moving center,
+ * creating phantom x/y offsets that cause double-movement in exports.
+ * Using left/top (= anchor position) means pure rotation produces
+ * zero x/y change — exactly what we want.
  */
 export const extractPropertiesFromFabricObject = (fabricObject) => {
   if (!fabricObject) return null;
 
-  const center = fabricObject.getCenterPoint();
-
   const baseProps = {
-    x: center.x,
-    y: center.y,
+    x: fabricObject.left || 0,
+    y: fabricObject.top || 0,
     scaleX: fabricObject.scaleX || 1,
     scaleY: fabricObject.scaleY || 1,
     rotation: fabricObject.angle || 0,
@@ -187,22 +194,10 @@ export const ungroupFabricGroup = (fabricCanvas, group) => {
 /**
  * Change the anchor/pivot point of a Fabric.js object.
  * 
- * WHY THE PREVIOUS VERSION DIDN'T WORK:
- * 
- * Problem 1: centeredRotation defaults to TRUE in Fabric.js.
- *   When true, rotation ALWAYS happens around the geometric center,
- *   completely ignoring originX/originY. Must set to false.
- * 
- * Problem 2: The rotation handle (mtr control) position is NOT tied
- *   to originX/originY. It's a separate Control object with its own
- *   x/y coordinates. Must be repositioned explicitly.
- * 
- * Problem 3: Controls are shared by prototype. Changing one object's
- *   mtr affects all objects. Must create per-object controls copy.
- * 
- * @param {fabric.Object} fabricObject - The Fabric.js object
- * @param {number} anchorX - 0=left, 0.5=center, 1=right
- * @param {number} anchorY - 0=top, 0.5=center, 1=bottom
+ * 1. centeredRotation = false → rotation uses origin as pivot
+ * 2. Changes originX/originY → moves where the pivot is
+ * 3. Repositions mtr control → moves the rotation handle visually
+ * 4. Compensates left/top → object doesn't visually jump
  */
 export const changeAnchorPoint = (fabricObject, anchorX, anchorY) => {
   if (!fabricObject) return;
@@ -212,26 +207,21 @@ export const changeAnchorPoint = (fabricObject, anchorX, anchorY) => {
   
   const isCenter = Math.abs(anchorX - 0.5) < 0.01 && Math.abs(anchorY - 0.5) < 0.01;
   
-  // ===== STEP 1: Create per-object controls copy (only once) =====
-  // Controls are shared via prototype. Without this, changing mtr on one
-  // object would affect ALL objects of the same type.
+  // Create per-object controls copy (only once)
   if (!fabricObject._hasCustomControls) {
     fabricObject.controls = Object.assign({}, fabricObject.controls);
     fabricObject._hasCustomControls = true;
   }
   
-  // Save reference to existing mtr control to copy its handlers
   const existingMtr = fabricObject.controls.mtr;
   
   if (isCenter) {
-    // ===== RESET to default center rotation =====
     fabricObject.centeredRotation = true;
     fabricObject.set({
       originX: 'center',
       originY: 'center',
     });
     
-    // Restore default mtr at top-center (x=0, y=-0.5)
     fabricObject.controls.mtr = new fabric.Control({
       x: 0,
       y: -0.5,
@@ -243,24 +233,12 @@ export const changeAnchorPoint = (fabricObject, anchorX, anchorY) => {
     });
     
   } else {
-    // ===== SET custom anchor point =====
-    
-    // STEP 2: Disable centered rotation
-    // This makes Fabric.js use originX/originY as the rotation pivot
-    // instead of always rotating around the geometric center
     fabricObject.centeredRotation = false;
-    
-    // STEP 3: Set origin to the anchor position
-    // Fabric.js 6 accepts numeric values: 0=left/top, 0.5=center, 1=right/bottom
     fabricObject.set({
       originX: anchorX,
       originY: anchorY,
     });
     
-    // STEP 4: Reposition the mtr (rotation) control handle
-    // Control x/y range: [-0.5, 0.5] where -0.5=left/top, 0=center, 0.5=right/bottom
-    // Our anchor range: [0, 1] where 0=left/top, 0.5=center, 1=right/bottom
-    // Conversion: controlPos = anchorPos - 0.5
     fabricObject.controls.mtr = new fabric.Control({
       x: anchorX - 0.5,
       y: anchorY - 0.5,
@@ -272,16 +250,13 @@ export const changeAnchorPoint = (fabricObject, anchorX, anchorY) => {
     });
   }
   
-  // ===== STEP 5: Compensate position =====
-  // Changing origin changes what left/top means, which would move the object.
-  // setPositionByOrigin places the object so its CENTER stays at currentCenter.
+  // Compensate position: keep visual CENTER at the same spot
   fabricObject.setPositionByOrigin(
     new fabric.Point(currentCenter.x, currentCenter.y),
     'center',
     'center'
   );
   
-  // ===== STEP 6: Recalculate everything =====
   fabricObject.dirty = true;
   fabricObject.setCoords();
 };

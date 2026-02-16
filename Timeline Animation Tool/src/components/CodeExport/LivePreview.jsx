@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import { Box, Paper, Typography } from '@mui/material';
 import gsap from 'gsap';
 import { useCanvasObjects, useKeyframes, useDuration, useFabricCanvas } from '../../store/hooks';
+import { normalizeKeyframeRotations } from '../../utils/interpolation';
 import { CANVAS_WIDTH, CANVAS_HEIGHT } from '../Canvas/Canvas';
 
 /**
@@ -35,7 +36,6 @@ const LivePreview = () => {
     
     timelineRef.current = gsap.timeline({ repeat: -1 });
 
-    // Identify group children (skip them at top level)
     const groupChildren = new Set();
     canvasObjects.forEach(obj => {
       if (obj.type === 'group' && obj.children) {
@@ -44,9 +44,12 @@ const LivePreview = () => {
     });
 
     canvasObjects.forEach(obj => {
-      const objKeyframes = keyframes[obj.id] || [];
-      if (objKeyframes.length === 0) return;
+      const rawKeyframes = keyframes[obj.id] || [];
+      if (rawKeyframes.length === 0) return;
       if (groupChildren.has(obj.id)) return;
+
+      // Normalize rotation to take shortest angular path
+      const objKeyframes = normalizeKeyframeRotations(rawKeyframes);
 
       if (obj.type === 'group') {
         renderGroup(obj, objKeyframes);
@@ -64,7 +67,6 @@ const LivePreview = () => {
 
   /**
    * Render a group.
-   * Group div at center (x,y) with 0x0 size. transformOrigin at anchor offset.
    */
   const renderGroup = (obj, objKeyframes) => {
     const container = containerRef.current;
@@ -73,12 +75,9 @@ const LivePreview = () => {
     if (!fabricGroup) return;
     
     const firstKf = objKeyframes[0];
-
-    // Anchor point
     const anchorX = obj.anchorX ?? 0.5;
     const anchorY = obj.anchorY ?? 0.5;
 
-    // Create group container div at center position
     const groupEl = document.createElement('div');
     groupEl.id = obj.id;
     groupEl.style.position = 'absolute';
@@ -88,8 +87,6 @@ const LivePreview = () => {
     groupEl.style.height = '0px';
     groupEl.style.overflow = 'visible';
     
-    // Transform origin: for groups, 0px 0px = center of group.
-    // Anchor offset = (anchor - 0.5) * groupSize
     const groupWidth = (fabricGroup.width || 0) * (fabricGroup.scaleX || 1);
     const groupHeight = (fabricGroup.height || 0) * (fabricGroup.scaleY || 1);
     const pivotOffsetX = (anchorX - 0.5) * groupWidth;
@@ -98,7 +95,6 @@ const LivePreview = () => {
     
     container.appendChild(groupEl);
 
-    // Set initial transform state
     gsap.set(groupEl, {
       scaleX: firstKf.properties.scaleX,
       scaleY: firstKf.properties.scaleY,
@@ -106,7 +102,6 @@ const LivePreview = () => {
       opacity: firstKf.properties.opacity,
     });
 
-    // Create children from Fabric group data
     if (fabricGroup._objects) {
       fabricGroup._objects.forEach((fabricChild) => {
         const childObj = canvasObjects.find(o => o.id === fabricChild.id);
@@ -126,7 +121,6 @@ const LivePreview = () => {
       });
     }
 
-    // Animate group
     for (let i = 1; i < objKeyframes.length; i++) {
       const prevKf = objKeyframes[i - 1];
       const currKf = objKeyframes[i];
@@ -182,7 +176,7 @@ const LivePreview = () => {
   };
 
   /**
-   * Render a solid shape child (rect, circle, text) inside a group.
+   * Render a solid shape child inside a group.
    */
   const renderSolidChild = (fabricChild, childObj, relLeft, relTop, scaleX, scaleY, angle, parentEl) => {
     const el = document.createElement('div');
@@ -227,25 +221,15 @@ const LivePreview = () => {
   };
 
   /**
-   * Render a standalone path (not in a group).
-   * 
-   * ANCHOR FIX: Calculate transform-origin in pixel coordinates.
-   * The SVG spans the full canvas (0,0 to CANVAS_WIDTH,CANVAS_HEIGHT).
-   * The path's visual center is at pathOffset. The anchor point is
-   * offset from the center by (anchor - 0.5) * objectSize.
-   * 
-   * This makes GSAP rotate the entire SVG around the anchor point
-   * instead of the default center of the SVG element.
+   * Render a standalone path.
    */
   const renderPath = (obj, objKeyframes) => {
     const container = containerRef.current;
     const timeline = timelineRef.current;
     if (objKeyframes.length === 0) return;
 
-    // Get Fabric object for geometry data
     const fabricObject = fabricCanvas?.getObjects().find(o => o.id === obj.id);
     
-    // Anchor values (0-1 range, relative to object bounding box)
     const anchorX = obj.anchorX ?? 0.5;
     const anchorY = obj.anchorY ?? 0.5;
 
@@ -259,19 +243,12 @@ const LivePreview = () => {
     el.setAttribute('width', CANVAS_WIDTH);
     el.setAttribute('height', CANVAS_HEIGHT);
 
-    // Calculate transform-origin at the anchor point position
-    // pathOffset = center of the path data in SVG coordinates
-    // Object bounding box: width × height around the pathOffset
     if (fabricObject) {
       const pathOffsetX = fabricObject.pathOffset?.x || 0;
       const pathOffsetY = fabricObject.pathOffset?.y || 0;
       const objWidth = fabricObject.width || 0;
       const objHeight = fabricObject.height || 0;
       
-      // Pivot point in SVG pixel coordinates
-      // anchor 0 = left edge = pathOffset - width/2
-      // anchor 0.5 = center = pathOffset
-      // anchor 1 = right edge = pathOffset + width/2
       const pivotX = pathOffsetX + (anchorX - 0.5) * objWidth;
       const pivotY = pathOffsetY + (anchorY - 0.5) * objHeight;
       
@@ -321,7 +298,6 @@ const LivePreview = () => {
 
   /**
    * Render a regular element (rectangle, circle, text).
-   * Anchor support via CSS transform-origin percentage.
    */
   const renderRegular = (obj, objKeyframes) => {
     const container = containerRef.current;
@@ -332,21 +308,21 @@ const LivePreview = () => {
     
     const anchorX = obj.anchorX ?? 0.5;
     const anchorY = obj.anchorY ?? 0.5;
+    const elWidth = 100;
+    const elHeight = 100;
 
     const el = document.createElement('div');
     el.id = obj.id;
     el.style.position = 'absolute';
     el.style.transformOrigin = `${anchorX * 100}% ${anchorY * 100}%`;
 
-    const halfW = 50, halfH = 50;
-
     if (obj.type === 'rectangle') {
-      el.style.width = '100px';
-      el.style.height = '100px';
+      el.style.width = elWidth + 'px';
+      el.style.height = elHeight + 'px';
       el.style.backgroundColor = '#3b82f6';
     } else if (obj.type === 'circle') {
-      el.style.width = '100px';
-      el.style.height = '100px';
+      el.style.width = elWidth + 'px';
+      el.style.height = elHeight + 'px';
       el.style.borderRadius = '50%';
       el.style.backgroundColor = '#ef4444';
     } else if (obj.type === 'text') {
@@ -357,8 +333,8 @@ const LivePreview = () => {
       el.style.whiteSpace = 'nowrap';
     }
 
-    el.style.left = (firstKf.properties.x - halfW) + 'px';
-    el.style.top = (firstKf.properties.y - halfH) + 'px';
+    el.style.left = (firstKf.properties.x - anchorX * elWidth) + 'px';
+    el.style.top = (firstKf.properties.y - anchorY * elHeight) + 'px';
     
     container.appendChild(el);
 
@@ -374,8 +350,8 @@ const LivePreview = () => {
       const currKf = objKeyframes[i];
       timeline.to(el, {
         duration: currKf.time - prevKf.time,
-        left: (currKf.properties.x - halfW) + 'px',
-        top: (currKf.properties.y - halfH) + 'px',
+        left: (currKf.properties.x - anchorX * elWidth) + 'px',
+        top: (currKf.properties.y - anchorY * elHeight) + 'px',
         scaleX: currKf.properties.scaleX,
         scaleY: currKf.properties.scaleY,
         rotation: currKf.properties.rotation,

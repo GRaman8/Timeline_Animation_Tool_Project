@@ -8,6 +8,20 @@ export const lerp = (start, end, t) => {
 };
 
 /**
+ * Normalize an angle delta to [-180, 180] so animations take the shortest path.
+ * 
+ * Example: 0° to 289° → delta 289 → normalized to -71° (short counterclockwise)
+ * Without this: GSAP/lerp animates 289° clockwise (nearly full rotation)
+ * With this: animates 71° counterclockwise (correct pendulum swing)
+ */
+const normalizeAngle = (prevAngle, nextAngle) => {
+  let delta = nextAngle - prevAngle;
+  while (delta > 180) delta -= 360;
+  while (delta < -180) delta += 360;
+  return prevAngle + delta;
+};
+
+/**
  * Find keyframes surrounding a given time
  */
 export const findSurroundingKeyframes = (keyframes, time) => {
@@ -28,7 +42,8 @@ export const findSurroundingKeyframes = (keyframes, time) => {
 };
 
 /**
- * Interpolate properties between two keyframes at a given time with easing
+ * Interpolate properties between two keyframes at a given time with easing.
+ * Rotation is normalized to take the shortest angular path.
  */
 export const interpolateProperties = (beforeKf, afterKf, time, easingType = 'linear') => {
   if (!beforeKf || !afterKf) return null;
@@ -40,39 +55,32 @@ export const interpolateProperties = (beforeKf, afterKf, time, easingType = 'lin
   const rawT = (time - beforeKf.time) / (afterKf.time - beforeKf.time);
   const t = applyEasing(rawT, easingType);
 
+  // Normalize rotation to take shortest path
+  const normalizedRotation = normalizeAngle(
+    beforeKf.properties.rotation, 
+    afterKf.properties.rotation
+  );
+
   return {
     x: lerp(beforeKf.properties.x, afterKf.properties.x, t),
     y: lerp(beforeKf.properties.y, afterKf.properties.y, t),
     scaleX: lerp(beforeKf.properties.scaleX, afterKf.properties.scaleX, t),
     scaleY: lerp(beforeKf.properties.scaleY, afterKf.properties.scaleY, t),
-    rotation: lerp(beforeKf.properties.rotation, afterKf.properties.rotation, t),
+    rotation: lerp(beforeKf.properties.rotation, normalizedRotation, t),
     opacity: lerp(beforeKf.properties.opacity, afterKf.properties.opacity, t),
   };
 };
 
 /**
  * Apply interpolated properties to a Fabric.js object.
- * 
- * Keyframe x/y are always CENTER coordinates (from getCenterPoint()).
- * We use setPositionByOrigin to place the object's center at (x, y),
- * which works correctly regardless of the object's origin setting.
- * 
- * For default center-origin: equivalent to setting left/top directly.
- * For custom-anchor objects: correctly compensates for non-center origin.
- * 
- * NEVER change originX/originY here - that's only for the anchor editor.
+ * Sets left/top directly (origin point position).
  */
 export const applyPropertiesToFabricObject = (fabricObject, properties) => {
   if (!fabricObject || !properties) return;
 
-  // Set position so the CENTER lands at (x, y) regardless of origin
-  fabricObject.setPositionByOrigin(
-    { x: properties.x, y: properties.y },
-    'center',
-    'center'
-  );
-
   fabricObject.set({
+    left: properties.x,
+    top: properties.y,
     scaleX: properties.scaleX,
     scaleY: properties.scaleY,
     angle: properties.rotation,
@@ -98,4 +106,37 @@ export const snapToNearestKeyframe = (time, keyframes, threshold = 0.1) => {
   }
   
   return nearest;
+};
+
+/**
+ * Pre-process keyframes to normalize rotation values for animation.
+ * Each rotation is adjusted relative to the previous keyframe to take
+ * the shortest angular path. Returns a new array (does not mutate input).
+ * 
+ * Used by LivePreview and codeGenerator before building GSAP timelines.
+ */
+export const normalizeKeyframeRotations = (keyframes) => {
+  if (!keyframes || keyframes.length < 2) return keyframes;
+  
+  const normalized = [keyframes[0]];
+  
+  for (let i = 1; i < keyframes.length; i++) {
+    const prevRotation = normalized[i - 1].properties.rotation;
+    const currRotation = keyframes[i].properties.rotation;
+    const normalizedRotation = normalizeAngle(prevRotation, currRotation);
+    
+    if (normalizedRotation === currRotation) {
+      normalized.push(keyframes[i]);
+    } else {
+      normalized.push({
+        ...keyframes[i],
+        properties: {
+          ...keyframes[i].properties,
+          rotation: normalizedRotation,
+        }
+      });
+    }
+  }
+  
+  return normalized;
 };
