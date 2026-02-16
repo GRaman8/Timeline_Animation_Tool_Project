@@ -18,20 +18,28 @@ import {
   Download, 
   Close,
   Code,
-  Preview
 } from '@mui/icons-material';
 import { generateAnimationCode, downloadAllFiles, copyToClipboard } from '../../utils/codeGenerator';
-import { useCanvasObjects, useKeyframes, useDuration } from '../../store/hooks';
+import { useCanvasObjects, useKeyframes, useDuration, useLoopPlayback, useFabricCanvas } from '../../store/hooks';
 
 const CodeExportDialog = ({ open, onClose }) => {
   const [canvasObjects] = useCanvasObjects();
   const [keyframes] = useKeyframes();
   const [duration] = useDuration();
+  const [loopPlayback] = useLoopPlayback();
+  const [fabricCanvas] = useFabricCanvas(); // ADDED: Get fabricCanvas
   const [currentTab, setCurrentTab] = useState(0);
   const [snackbarOpen, setSnackbarOpen] = useState(false);
   const [snackbarMessage, setSnackbarMessage] = useState('');
 
-  const { html, css, javascript } = generateAnimationCode(canvasObjects, keyframes, duration);
+  // FIXED: Pass fabricCanvas to code generator
+  const { html, css, javascript } = generateAnimationCode(
+    canvasObjects, 
+    keyframes, 
+    duration, 
+    loopPlayback,
+    fabricCanvas // Pass fabricCanvas for group child positions
+  );
 
   const handleCopy = async (content, label) => {
     const success = await copyToClipboard(content);
@@ -129,6 +137,19 @@ const CodeExportDialog = ({ open, onClose }) => {
               4. Open index.html in a web browser to view your animation
               <br />
               5. The animation uses GSAP (loaded from CDN) - no installation required!
+              <br />
+              {loopPlayback && (
+                <>
+                  <br />
+                  <strong>🔁 Loop is ENABLED</strong> - Animation will repeat infinitely
+                </>
+              )}
+              {!loopPlayback && (
+                <>
+                  <br />
+                  <strong>▶️ Loop is DISABLED</strong> - Animation will play once and stop
+                </>
+              )}
             </Typography>
           </Box>
         </DialogContent>

@@ -1,0 +1,28 @@
+/* Generated Animation Styles */
+
+body {
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    font-family: Arial, sans-serif;
+}
+
+#animation-container {
+    position: relative;
+    width: 1400px;
+    height: 800px;
+    background-color: #f0f0f0;
+    margin: 20px auto;
+    border: 1px solid #ccc;
+    overflow: hidden;
+}
+
+#group_1770610290566 {
+    position: absolute;
+    left: 211.50px;
+    top: 224.50px;
+    transform: scale(1, 1) rotate(0deg);
+    transform-origin: center center;
+    opacity: 1;
+}
+

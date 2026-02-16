@@ -1,14 +1,15 @@
 import * as fabric from 'fabric';
 
 /**
- * Create a new Fabric.js object based on type
-*/
+ * Create a new Fabric.js object based on type.
+ * ALL objects use originX:'center', originY:'center' so left/top = center.
+ */
 export const createFabricObject = (type, id) => {
   const baseProps = {
     id,
     left: 100,
     top: 100,
-    originX: 'center', // Fabric uses center by default
+    originX: 'center',
     originY: 'center',
   };
 
@@ -36,7 +37,7 @@ export const createFabricObject = (type, id) => {
       });
     
     case 'path':
-      return null; // Paths are created via createPathFromPoints
+      return null;
       
     default:
       return null;
@@ -49,21 +50,17 @@ export const createFabricObject = (type, id) => {
 export const createPathFromPoints = (points, id, settings) => {
   if (points.length < 2) return null;
 
-  // Convert points to SVG path string
   let pathString = `M ${points[0].x} ${points[0].y}`;
   
   if (settings.smoothing && points.length > 2) {
-    // Use quadratic curves for smoother paths
     for (let i = 1; i < points.length - 1; i++) {
       const xc = (points[i].x + points[i + 1].x) / 2;
       const yc = (points[i].y + points[i + 1].y) / 2;
       pathString += ` Q ${points[i].x} ${points[i].y}, ${xc} ${yc}`;
     }
-    // Add the last point
     const lastPoint = points[points.length - 1];
     pathString += ` L ${lastPoint.x} ${lastPoint.y}`;
   } else {
-    // Simple line segments
     for (let i = 1; i < points.length; i++) {
       pathString += ` L ${points[i].x} ${points[i].y}`;
     }
@@ -77,7 +74,7 @@ export const createPathFromPoints = (points, id, settings) => {
     strokeLineCap: 'round',
     strokeLineJoin: 'round',
     selectable: true,
-    originX: 'center', // Use center origin like other objects
+    originX: 'center',
     originY: 'center',
   });
 
@@ -85,14 +82,22 @@ export const createPathFromPoints = (points, id, settings) => {
 };
 
 /**
- * Extract properties from a Fabric.js object
- * Fabric.js stores positions based on origin (usually center)
- * We need to extract the actual position for animation
-*/
+ * Extract properties from a Fabric.js object.
+ * 
+ * USES left/top DIRECTLY — this is the ORIGIN POINT position:
+ * - For center-origin objects: left/top = center (same as getCenterPoint)
+ * - For custom-anchor objects: left/top = anchor/pivot position
+ * 
+ * WHY THIS MATTERS FOR PENDULUM/ROTATION:
+ * When rotating around a custom anchor, the anchor stays fixed but the
+ * center moves. getCenterPoint() would capture that moving center,
+ * creating phantom x/y offsets that cause double-movement in exports.
+ * Using left/top (= anchor position) means pure rotation produces
+ * zero x/y change — exactly what we want.
+ */
 export const extractPropertiesFromFabricObject = (fabricObject) => {
   if (!fabricObject) return null;
 
-  // All objects use center origin in Fabric.js
   const baseProps = {
     x: fabricObject.left || 0,
     y: fabricObject.top || 0,
@@ -101,8 +106,7 @@ export const extractPropertiesFromFabricObject = (fabricObject) => {
     rotation: fabricObject.angle || 0,
     opacity: fabricObject.opacity !== undefined ? fabricObject.opacity : 1,
   };
-
-  // Include path-specific data for path objects
+  
   if (fabricObject.type === 'path') {
     return {
       ...baseProps,
@@ -121,4 +125,138 @@ export const extractPropertiesFromFabricObject = (fabricObject) => {
 export const findFabricObjectById = (canvas, id) => {
   if (!canvas) return null;
   return canvas.getObjects().find(obj => obj.id === id) || null;
+};
+
+/**
+ * Properly ungroup a Fabric.js group.
+ */
+export const ungroupFabricGroup = (fabricCanvas, group) => {
+  if (!fabricCanvas || !group || group.type !== 'group') return [];
+
+  const items = [...(group._objects || [])];
+  if (items.length === 0) return [];
+  
+  const groupMatrix = group.calcTransformMatrix();
+  const groupScaleX = group.scaleX || 1;
+  const groupScaleY = group.scaleY || 1;
+  const groupAngle = group.angle || 0;
+  const groupOpacity = group.opacity !== undefined ? group.opacity : 1;
+
+  const childrenData = items.map(item => {
+    const localPoint = { x: item.left || 0, y: item.top || 0 };
+    const absPoint = fabric.util.transformPoint(localPoint, groupMatrix);
+    
+    return {
+      item,
+      absLeft: absPoint.x,
+      absTop: absPoint.y,
+      absScaleX: groupScaleX * (item.scaleX || 1),
+      absScaleY: groupScaleY * (item.scaleY || 1),
+      absAngle: groupAngle + (item.angle || 0),
+      absOpacity: groupOpacity * (item.opacity !== undefined ? item.opacity : 1),
+    };
+  });
+
+  fabricCanvas.remove(group);
+
+  const restoredItems = [];
+  childrenData.forEach(({ item, absLeft, absTop, absScaleX, absScaleY, absAngle, absOpacity }) => {
+    item.group = undefined;
+    item.canvas = undefined;
+    if (item._cacheCanvas) {
+      item._cacheCanvas = null;
+    }
+    
+    item.set({
+      left: absLeft,
+      top: absTop,
+      scaleX: absScaleX,
+      scaleY: absScaleY,
+      angle: absAngle,
+      opacity: absOpacity,
+      originX: 'center',
+      originY: 'center',
+      visible: true,
+      selectable: true,
+      evented: true,
+    });
+    
+    item.dirty = true;
+    fabricCanvas.add(item);
+    item.setCoords();
+    restoredItems.push(item);
+  });
+
+  fabricCanvas.requestRenderAll();
+  return restoredItems;
+};
+
+/**
+ * Change the anchor/pivot point of a Fabric.js object.
+ * 
+ * 1. centeredRotation = false → rotation uses origin as pivot
+ * 2. Changes originX/originY → moves where the pivot is
+ * 3. Repositions mtr control → moves the rotation handle visually
+ * 4. Compensates left/top → object doesn't visually jump
+ */
+export const changeAnchorPoint = (fabricObject, anchorX, anchorY) => {
+  if (!fabricObject) return;
+  
+  // Save current visual center BEFORE changing anything
+  const currentCenter = fabricObject.getCenterPoint();
+  
+  const isCenter = Math.abs(anchorX - 0.5) < 0.01 && Math.abs(anchorY - 0.5) < 0.01;
+  
+  // Create per-object controls copy (only once)
+  if (!fabricObject._hasCustomControls) {
+    fabricObject.controls = Object.assign({}, fabricObject.controls);
+    fabricObject._hasCustomControls = true;
+  }
+  
+  const existingMtr = fabricObject.controls.mtr;
+  
+  if (isCenter) {
+    fabricObject.centeredRotation = true;
+    fabricObject.set({
+      originX: 'center',
+      originY: 'center',
+    });
+    
+    fabricObject.controls.mtr = new fabric.Control({
+      x: 0,
+      y: -0.5,
+      offsetY: existingMtr?.offsetY ?? -40,
+      cursorStyleHandler: existingMtr?.cursorStyleHandler,
+      actionHandler: existingMtr?.actionHandler,
+      actionName: 'rotate',
+      withConnection: true,
+    });
+    
+  } else {
+    fabricObject.centeredRotation = false;
+    fabricObject.set({
+      originX: anchorX,
+      originY: anchorY,
+    });
+    
+    fabricObject.controls.mtr = new fabric.Control({
+      x: anchorX - 0.5,
+      y: anchorY - 0.5,
+      offsetY: existingMtr?.offsetY ?? -40,
+      cursorStyleHandler: existingMtr?.cursorStyleHandler,
+      actionHandler: existingMtr?.actionHandler,
+      actionName: 'rotate',
+      withConnection: true,
+    });
+  }
+  
+  // Compensate position: keep visual CENTER at the same spot
+  fabricObject.setPositionByOrigin(
+    new fabric.Point(currentCenter.x, currentCenter.y),
+    'center',
+    'center'
+  );
+  
+  fabricObject.dirty = true;
+  fabricObject.setCoords();
 };

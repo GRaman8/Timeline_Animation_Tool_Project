@@ -1,34 +1,47 @@
 import { atom } from 'recoil';
 
-// Canvas objects state
+// Canvas objects state - NOW SUPPORTS GROUPS
 export const canvasObjectsState = atom({
   key: 'canvasObjectsState',
   default: [],
-  // Structure: [{ id, type, name, fabricObject }]
+  // Structure: [{ 
+  //   id, 
+  //   type, // 'rectangle', 'circle', 'text', 'path', 'group'
+  //   name, 
+  //   children: [], // Only for groups - array of child object IDs
+  //   anchorX: 0.5, // 0-1, where 0.5 is center (NEW)
+  //   anchorY: 0.5  // 0-1, where 0.5 is center (NEW)
+  // }]
 });
 
-// Keyframes state
+// Keyframes state - NOW INCLUDES ANCHOR POINT
 export const keyframesState = atom({
   key: 'keyframesState',
   default: {},
-  // Structure: { [objectId]: [{ time, properties }] }
+  // Structure: { [objectId]: [{ 
+  //   time, 
+  //   properties: {
+  //     x, y, scaleX, scaleY, rotation, opacity,
+  //     anchorX, anchorY // NEW - anchor point can be animated
+  //   }
+  // }] }
 });
 
 // Selected object state
 export const selectedObjectState = atom({
   key: 'selectedObjectState',
-  default: null, // object id});
+  default: null,
 });
 
 // Timeline state
 export const currentTimeState = atom({
   key: 'currentTimeState',
-  default: 0, // in seconds
+  default: 0,
 });
 
 export const durationState = atom({
   key: 'durationState',
-  default: 10, // in seconds
+  default: 10,
 });
 
 export const isPlayingState = atom({
@@ -36,14 +49,14 @@ export const isPlayingState = atom({
   default: false,
 });
 
-// Canvas reference (special case - stores fabric canvas instance)
+// Canvas reference
 export const fabricCanvasState = atom({
   key: 'fabricCanvasState',
   default: null,
-  dangerouslyAllowMutability: true, // Fabric.js objects are mutable
+  dangerouslyAllowMutability: true,
 });
 
-// Property values for selected object
+// Property values for selected object - NOW INCLUDES ANCHOR
 export const selectedObjectPropertiesState = atom({
   key: 'selectedObjectPropertiesState',
   default: {
@@ -53,16 +66,15 @@ export const selectedObjectPropertiesState = atom({
     scaleY: 1,
     rotation: 0,
     opacity: 1,
+    anchorX: 0.5, // NEW
+    anchorY: 0.5, // NEW
   },
 });
-
-// Phase-3 code:
 
 // Easing function state for keyframes
 export const keyframeEasingState = atom({
   key: 'keyframeEasingState',
   default: {},
-  // Structure: { [objectId]: { [keyframeIndex]: 'easingType' } }
 });
 
 // Loop playback state
@@ -74,14 +86,13 @@ export const loopPlaybackState = atom({
 // Timeline zoom level
 export const timelineZoomState = atom({
   key: 'timelineZoomState',
-  default: 1, // 1 = normal, 2 = 2x zoom, 0.5 = 0.5x zoom
+  default: 1,
 });
 
 // Selected keyframe for editing
 export const selectedKeyframeState = atom({
   key: 'selectedKeyframeState',
   default: null,
-  // Structure: { objectId: string, keyframeIndex: number }
 });
 
 // Snap to keyframes setting
@@ -90,7 +101,7 @@ export const snapToKeyframesState = atom({
   default: false,
 });
 
-// Track if any objects are selected (for toolbar button states)
+// Track if any objects are selected
 export const hasActiveSelectionState = atom({
   key: 'hasActiveSelectionState',
   default: false,
@@ -117,4 +128,10 @@ export const drawingToolSettingsState = atom({
     strokeWidth: 3,
     smoothing: true,
   },
+});
+
+// Anchor point editing mode (NEW)
+export const anchorEditModeState = atom({
+  key: 'anchorEditModeState',
+  default: false,
 });

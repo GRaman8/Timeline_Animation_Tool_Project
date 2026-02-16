@@ -18,6 +18,7 @@ import {
   drawingModeState,
   currentDrawingPathState,
   drawingToolSettingsState,
+  anchorEditModeState, // NEW
 } from './atoms';
 
 import {
@@ -67,11 +68,6 @@ export const useSelectedObjectKeyframes = () => {
   return useRecoilValue(selectedObjectKeyframesSelector);
 };
 
-
-// Phase-3 code: 
-
-// ADD these new hooks at the bottom of the file:
-
 export const useKeyframeEasing = () => {
   return useRecoilState(keyframeEasingState);
 };
@@ -106,4 +102,9 @@ export const useCurrentDrawingPath = () => {
 
 export const useDrawingToolSettings = () => {
   return useRecoilState(drawingToolSettingsState);
+};
+
+// NEW - Anchor edit mode hook
+export const useAnchorEditMode = () => {
+  return useRecoilState(anchorEditModeState);
 };
