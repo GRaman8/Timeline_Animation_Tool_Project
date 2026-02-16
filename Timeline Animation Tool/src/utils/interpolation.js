@@ -53,17 +53,26 @@ export const interpolateProperties = (beforeKf, afterKf, time, easingType = 'lin
 /**
  * Apply interpolated properties to a Fabric.js object.
  * 
- * Since ALL objects use originX:'center', originY:'center',
- * setting left/top directly sets the center position.
+ * Keyframe x/y are always CENTER coordinates (from getCenterPoint()).
+ * We use setPositionByOrigin to place the object's center at (x, y),
+ * which works correctly regardless of the object's origin setting.
  * 
- * NEVER change originX/originY here - it causes position jumps.
+ * For default center-origin: equivalent to setting left/top directly.
+ * For custom-anchor objects: correctly compensates for non-center origin.
+ * 
+ * NEVER change originX/originY here - that's only for the anchor editor.
  */
 export const applyPropertiesToFabricObject = (fabricObject, properties) => {
   if (!fabricObject || !properties) return;
 
+  // Set position so the CENTER lands at (x, y) regardless of origin
+  fabricObject.setPositionByOrigin(
+    { x: properties.x, y: properties.y },
+    'center',
+    'center'
+  );
+
   fabricObject.set({
-    left: properties.x,
-    top: properties.y,
     scaleX: properties.scaleX,
     scaleY: properties.scaleY,
     angle: properties.rotation,

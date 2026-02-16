@@ -62,6 +62,11 @@ const PropertiesPanel = () => {
     setProperties(prev => ({ ...prev, opacity: newValue }));
   };
 
+  /**
+   * Handle position change using center-based coordinates.
+   * Uses setPositionByOrigin so it works correctly regardless of
+   * the object's current origin setting (default center or custom anchor).
+   */
   const handlePositionChange = (axis, value) => {
     if (!selectedObject || !fabricCanvas) return;
 
@@ -71,10 +76,17 @@ const PropertiesPanel = () => {
     const numValue = parseFloat(value);
     if (isNaN(numValue)) return;
 
-    // Since all objects use center origin, left/top = center
-    if (axis === 'x') fabricObject.set('left', numValue);
-    else fabricObject.set('top', numValue);
-    
+    // Get current center, update the changed axis
+    const center = fabricObject.getCenterPoint();
+    if (axis === 'x') center.x = numValue;
+    else center.y = numValue;
+
+    // Place object so its CENTER is at the new position
+    fabricObject.setPositionByOrigin(
+      { x: center.x, y: center.y },
+      'center',
+      'center'
+    );
     fabricObject.setCoords();
     fabricCanvas.renderAll();
 
@@ -155,7 +167,7 @@ const PropertiesPanel = () => {
                     🎯 Anchor Point Mode
                   </Typography>
                   <Typography variant="caption">
-                    Drag the red crosshair to set the rotation pivot
+                    Drag the red crosshair to move the rotation pivot
                   </Typography>
                 </Paper>
 
@@ -176,11 +188,11 @@ const PropertiesPanel = () => {
                 <Paper variant="outlined" sx={{ p: 2, bgcolor: 'info.light', color: 'info.contrastText' }}>
                   <Typography variant="body2" sx={{ lineHeight: 1.6 }}>
                     💡 <strong>How to use:</strong>
-                    <br />• Drag the red crosshair on the canvas
+                    <br />• Drag the red crosshair on the canvas to set the pivot
+                    <br />• The rotation handle (arm) moves to the new pivot
                     <br />• Double-click the crosshair to reset to center
-                    <br />• The pivot affects rotation in Live Preview and exported code
-                    <br />• Example: Set to 50%, 0% for a pendulum swinging from its top
-                    <br />• Example: Set to 0%, 50% for a door hinge on the left
+                    <br />• Example: Set to 50%, 0% for a pendulum from top
+                    <br />• Example: Set to 0%, 50% for a door hinge on left
                     <br />• Set the anchor BEFORE adding rotation keyframes
                   </Typography>
                 </Paper>
@@ -289,8 +301,8 @@ const PropertiesPanel = () => {
                   💡 <strong>Tip:</strong> X/Y values represent the object's center position. 
                   Change values here or drag objects on the canvas. Click "Add Keyframe" to record.
                   {hasCustomAnchor && (
-                    <><br /><br />🎯 Custom pivot set at ({(anchorX*100).toFixed(0)}%, {(anchorY*100).toFixed(0)}%). 
-                    Rotation in Live Preview and exported code will use this pivot point.</>
+                    <><br /><br />🎯 Custom pivot at ({(anchorX*100).toFixed(0)}%, {(anchorY*100).toFixed(0)}%). 
+                    The rotation handle has moved to this point.</>
                   )}
                 </Typography>
               </Paper>

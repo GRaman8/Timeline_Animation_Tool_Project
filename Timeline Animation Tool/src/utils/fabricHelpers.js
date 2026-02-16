@@ -83,16 +83,17 @@ export const createPathFromPoints = (points, id, settings) => {
 
 /**
  * Extract properties from a Fabric.js object.
- * 
- * Since ALL objects (including groups) are created with originX:'center',
- * left/top directly gives us the center position. Simple and consistent.
+ * Uses getCenterPoint() to always get the TRUE visual center,
+ * regardless of what originX/originY is set to.
  */
 export const extractPropertiesFromFabricObject = (fabricObject) => {
   if (!fabricObject) return null;
 
+  const center = fabricObject.getCenterPoint();
+
   const baseProps = {
-    x: fabricObject.left || 0,
-    y: fabricObject.top || 0,
+    x: center.x,
+    y: center.y,
     scaleX: fabricObject.scaleX || 1,
     scaleY: fabricObject.scaleY || 1,
     rotation: fabricObject.angle || 0,
@@ -121,10 +122,6 @@ export const findFabricObjectById = (canvas, id) => {
 
 /**
  * Properly ungroup a Fabric.js group.
- * 
- * Strategy: compute absolute position for each child using the group's
- * transform matrix, then remove the group, then add each child back
- * as an independent object with forced clean state.
  */
 export const ungroupFabricGroup = (fabricCanvas, group) => {
   if (!fabricCanvas || !group || group.type !== 'group') return [];
@@ -138,12 +135,8 @@ export const ungroupFabricGroup = (fabricCanvas, group) => {
   const groupAngle = group.angle || 0;
   const groupOpacity = group.opacity !== undefined ? group.opacity : 1;
 
-  // Pre-calculate absolute transforms for each child BEFORE removing group
   const childrenData = items.map(item => {
-    // Get child's local position (relative to group center)
     const localPoint = { x: item.left || 0, y: item.top || 0 };
-    
-    // Transform to absolute canvas coordinates using group matrix
     const absPoint = fabric.util.transformPoint(localPoint, groupMatrix);
     
     return {
@@ -157,21 +150,16 @@ export const ungroupFabricGroup = (fabricCanvas, group) => {
     };
   });
 
-  // Remove group from canvas
   fabricCanvas.remove(group);
 
-  // Add each child back as independent object
   const restoredItems = [];
   childrenData.forEach(({ item, absLeft, absTop, absScaleX, absScaleY, absAngle, absOpacity }) => {
-    // CRITICAL: Clear ALL stale internal references from the group
-    // This is the fix for objects disappearing after ungrouping
     item.group = undefined;
     item.canvas = undefined;
     if (item._cacheCanvas) {
       item._cacheCanvas = null;
     }
     
-    // Set absolute position and transforms
     item.set({
       left: absLeft,
       top: absTop,
@@ -179,27 +167,121 @@ export const ungroupFabricGroup = (fabricCanvas, group) => {
       scaleY: absScaleY,
       angle: absAngle,
       opacity: absOpacity,
-      // Ensure center origin is maintained
       originX: 'center',
       originY: 'center',
-      // Force visibility
       visible: true,
       selectable: true,
       evented: true,
     });
     
-    // Mark as needing full recalculation
     item.dirty = true;
-    
-    // Add to canvas
     fabricCanvas.add(item);
-    
-    // Recalculate controls/bounds
     item.setCoords();
-    
     restoredItems.push(item);
   });
 
   fabricCanvas.requestRenderAll();
   return restoredItems;
+};
+
+/**
+ * Change the anchor/pivot point of a Fabric.js object.
+ * 
+ * WHY THE PREVIOUS VERSION DIDN'T WORK:
+ * 
+ * Problem 1: centeredRotation defaults to TRUE in Fabric.js.
+ *   When true, rotation ALWAYS happens around the geometric center,
+ *   completely ignoring originX/originY. Must set to false.
+ * 
+ * Problem 2: The rotation handle (mtr control) position is NOT tied
+ *   to originX/originY. It's a separate Control object with its own
+ *   x/y coordinates. Must be repositioned explicitly.
+ * 
+ * Problem 3: Controls are shared by prototype. Changing one object's
+ *   mtr affects all objects. Must create per-object controls copy.
+ * 
+ * @param {fabric.Object} fabricObject - The Fabric.js object
+ * @param {number} anchorX - 0=left, 0.5=center, 1=right
+ * @param {number} anchorY - 0=top, 0.5=center, 1=bottom
+ */
+export const changeAnchorPoint = (fabricObject, anchorX, anchorY) => {
+  if (!fabricObject) return;
+  
+  // Save current visual center BEFORE changing anything
+  const currentCenter = fabricObject.getCenterPoint();
+  
+  const isCenter = Math.abs(anchorX - 0.5) < 0.01 && Math.abs(anchorY - 0.5) < 0.01;
+  
+  // ===== STEP 1: Create per-object controls copy (only once) =====
+  // Controls are shared via prototype. Without this, changing mtr on one
+  // object would affect ALL objects of the same type.
+  if (!fabricObject._hasCustomControls) {
+    fabricObject.controls = Object.assign({}, fabricObject.controls);
+    fabricObject._hasCustomControls = true;
+  }
+  
+  // Save reference to existing mtr control to copy its handlers
+  const existingMtr = fabricObject.controls.mtr;
+  
+  if (isCenter) {
+    // ===== RESET to default center rotation =====
+    fabricObject.centeredRotation = true;
+    fabricObject.set({
+      originX: 'center',
+      originY: 'center',
+    });
+    
+    // Restore default mtr at top-center (x=0, y=-0.5)
+    fabricObject.controls.mtr = new fabric.Control({
+      x: 0,
+      y: -0.5,
+      offsetY: existingMtr?.offsetY ?? -40,
+      cursorStyleHandler: existingMtr?.cursorStyleHandler,
+      actionHandler: existingMtr?.actionHandler,
+      actionName: 'rotate',
+      withConnection: true,
+    });
+    
+  } else {
+    // ===== SET custom anchor point =====
+    
+    // STEP 2: Disable centered rotation
+    // This makes Fabric.js use originX/originY as the rotation pivot
+    // instead of always rotating around the geometric center
+    fabricObject.centeredRotation = false;
+    
+    // STEP 3: Set origin to the anchor position
+    // Fabric.js 6 accepts numeric values: 0=left/top, 0.5=center, 1=right/bottom
+    fabricObject.set({
+      originX: anchorX,
+      originY: anchorY,
+    });
+    
+    // STEP 4: Reposition the mtr (rotation) control handle
+    // Control x/y range: [-0.5, 0.5] where -0.5=left/top, 0=center, 0.5=right/bottom
+    // Our anchor range: [0, 1] where 0=left/top, 0.5=center, 1=right/bottom
+    // Conversion: controlPos = anchorPos - 0.5
+    fabricObject.controls.mtr = new fabric.Control({
+      x: anchorX - 0.5,
+      y: anchorY - 0.5,
+      offsetY: existingMtr?.offsetY ?? -40,
+      cursorStyleHandler: existingMtr?.cursorStyleHandler,
+      actionHandler: existingMtr?.actionHandler,
+      actionName: 'rotate',
+      withConnection: true,
+    });
+  }
+  
+  // ===== STEP 5: Compensate position =====
+  // Changing origin changes what left/top means, which would move the object.
+  // setPositionByOrigin places the object so its CENTER stays at currentCenter.
+  fabricObject.setPositionByOrigin(
+    new fabric.Point(currentCenter.x, currentCenter.y),
+    'center',
+    'center'
+  );
+  
+  // ===== STEP 6: Recalculate everything =====
+  fabricObject.dirty = true;
+  fabricObject.setCoords();
 };

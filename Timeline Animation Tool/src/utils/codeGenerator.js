@@ -3,6 +3,10 @@
  * 
  * Coordinate system: ALL keyframe x/y values are CENTER coordinates
  * (since all Fabric.js objects including groups use originX:'center').
+ * 
+ * Anchor/pivot support: transform-origin is set per-element based on
+ * stored anchorX/anchorY values. For paths, this requires computing
+ * the pixel position using pathOffset + bounding box from the Fabric object.
  */
 
 const CANVAS_WIDTH = 1400;
@@ -64,7 +68,6 @@ body {
 
 `;
 
-  // Build set of group children to skip
   const groupChildren = new Set();
   canvasObjects.forEach(obj => {
     if (obj.type === 'group' && obj.children) {
@@ -72,7 +75,6 @@ body {
     }
   });
 
-  // Only generate CSS for non-grouped, non-path, non-group top-level elements
   canvasObjects.forEach(obj => {
     if (groupChildren.has(obj.id)) return;
     const objKeyframes = keyframes[obj.id] || [];
@@ -84,7 +86,6 @@ body {
     const anchorX = obj.anchorX ?? 0.5;
     const anchorY = obj.anchorY ?? 0.5;
 
-    // center-based: CSS left = centerX - 50
     css += `#${obj.id} {
     position: absolute;
     left: ${(props.x - 50).toFixed(2)}px;
@@ -139,7 +140,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (obj.type === 'group') {
       js += generateGroupCreation(obj, firstKf, canvasObjects, fabricCanvas);
     } else if (obj.type === 'path') {
-      js += generatePathCreation(obj, firstKf);
+      js += generatePathCreation(obj, firstKf, fabricCanvas);
     } else {
       js += generateRegularCreation(obj, firstKf);
     }
@@ -171,6 +172,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // ========== GROUP CREATION ==========
 const generateGroupCreation = (obj, firstKf, canvasObjects, fabricCanvas) => {
+  const anchorX = obj.anchorX ?? 0.5;
+  const anchorY = obj.anchorY ?? 0.5;
+  
+  // Calculate pivot offset from group center
+  let pivotOffsetX = 0;
+  let pivotOffsetY = 0;
+  if (fabricCanvas) {
+    const fabricGroup = fabricCanvas.getObjects().find(o => o.id === obj.id);
+    if (fabricGroup) {
+      const groupWidth = (fabricGroup.width || 0) * (fabricGroup.scaleX || 1);
+      const groupHeight = (fabricGroup.height || 0) * (fabricGroup.scaleY || 1);
+      pivotOffsetX = (anchorX - 0.5) * groupWidth;
+      pivotOffsetY = (anchorY - 0.5) * groupHeight;
+    }
+  }
+
   let js = `    // Create ${obj.name} (Group)
     const ${obj.id} = document.createElement('div');
     ${obj.id}.id = '${obj.id}';
@@ -180,7 +197,7 @@ const generateGroupCreation = (obj, firstKf, canvasObjects, fabricCanvas) => {
     ${obj.id}.style.width = '0px';
     ${obj.id}.style.height = '0px';
     ${obj.id}.style.overflow = 'visible';
-    ${obj.id}.style.transformOrigin = '0px 0px';
+    ${obj.id}.style.transformOrigin = '${pivotOffsetX.toFixed(2)}px ${pivotOffsetY.toFixed(2)}px';
     container.appendChild(${obj.id});
     
     gsap.set(${obj.id}, {
@@ -291,7 +308,6 @@ const generateSolidChildCreation = (fabricChild, childObj, parentId, relLeft, re
 `;
   }
 
-  // Center to top-left offset
   const cssLeft = relLeft - childWidth / 2;
   const cssTop = relTop - childHeight / 2;
   js += `    ${fabricChild.id}.style.left = '${cssLeft.toFixed(2)}px';
@@ -309,8 +325,36 @@ const generateSolidChildCreation = (fabricChild, childObj, parentId, relLeft, re
 };
 
 // ========== STANDALONE PATH CREATION ==========
-const generatePathCreation = (obj, firstKf) => {
+/**
+ * ANCHOR FIX: Calculate transform-origin for the SVG element.
+ * 
+ * The SVG spans the full canvas (0,0 to 1400,800).
+ * Path data is in absolute SVG coordinates centered at pathOffset.
+ * The pivot point in pixels = pathOffset + (anchor - 0.5) * objectSize.
+ */
+const generatePathCreation = (obj, firstKf, fabricCanvas) => {
   const pathString = fabricPathToSVGPath(obj.pathData);
+  
+  const anchorX = obj.anchorX ?? 0.5;
+  const anchorY = obj.anchorY ?? 0.5;
+  
+  // Calculate pixel-precise transform-origin from Fabric object geometry
+  let transformOriginStr = '50% 50%'; // fallback
+  if (fabricCanvas) {
+    const fabricObject = fabricCanvas.getObjects().find(o => o.id === obj.id);
+    if (fabricObject) {
+      const pathOffsetX = fabricObject.pathOffset?.x || 0;
+      const pathOffsetY = fabricObject.pathOffset?.y || 0;
+      const objWidth = fabricObject.width || 0;
+      const objHeight = fabricObject.height || 0;
+      
+      const pivotX = pathOffsetX + (anchorX - 0.5) * objWidth;
+      const pivotY = pathOffsetY + (anchorY - 0.5) * objHeight;
+      
+      transformOriginStr = `${pivotX.toFixed(2)}px ${pivotY.toFixed(2)}px`;
+    }
+  }
+
   return `    // Create ${obj.name} (SVG Path)
     const ${obj.id} = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     ${obj.id}.id = '${obj.id}';
@@ -319,6 +363,7 @@ const generatePathCreation = (obj, firstKf) => {
     ${obj.id}.style.top = '0';
     ${obj.id}.style.overflow = 'visible';
     ${obj.id}.style.pointerEvents = 'none';
+    ${obj.id}.style.transformOrigin = '${transformOriginStr}';
     ${obj.id}.setAttribute('width', '${CANVAS_WIDTH}');
     ${obj.id}.setAttribute('height', '${CANVAS_HEIGHT}');
     var path_${obj.id} = document.createElementNS('http://www.w3.org/2000/svg', 'path');

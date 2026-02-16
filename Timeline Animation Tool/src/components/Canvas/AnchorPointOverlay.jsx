@@ -1,18 +1,14 @@
 /**
  * AnchorPointOverlay
  * 
- * Visual editor for setting the rotation pivot point.
+ * Visual editor for the rotation pivot point.
  * 
- * How it works:
- * - Shows a red crosshair over the selected object
- * - Drag the crosshair to set where rotation should pivot from
- * - The anchor value is stored in canvasObjects state
- * - LivePreview and exported code use this as CSS transform-origin
- * - Double-click the crosshair to reset to center (50%, 50%)
+ * When dragged, this ACTUALLY changes the Fabric.js object's originX/originY,
+ * which moves the rotation handle (the arm/stick) and changes the pivot point.
+ * The object's visual position is compensated so it doesn't jump.
  * 
- * Note: In the editor canvas, Fabric.js always rotates from the object's
- * built-in origin (center by default). The custom anchor affects rotation
- * in LivePreview and exported code via CSS transform-origin.
+ * The anchor values are also stored in canvasObjects state for use by
+ * LivePreview and exported code (as CSS transform-origin).
  */
 
 import React, { useEffect, useState, useRef, useCallback } from 'react';
@@ -25,7 +21,7 @@ import {
   useCanvasObjects,
 } from '../../store/hooks';
 
-import { findFabricObjectById } from '../../utils/fabricHelpers';
+import { findFabricObjectById, changeAnchorPoint } from '../../utils/fabricHelpers';
 
 const AnchorPointOverlay = () => {
   const [selectedObject] = useSelectedObject();
@@ -37,7 +33,7 @@ const AnchorPointOverlay = () => {
   const [isDragging, setIsDragging] = useState(false);
   const boundingRef = useRef(null);
 
-  // Get current anchor values
+  // Get current anchor values from state
   const getAnchor = useCallback(() => {
     const obj = canvasObjects.find(o => o.id === selectedObject);
     return {
@@ -92,7 +88,7 @@ const AnchorPointOverlay = () => {
   };
 
   const handleMouseMove = useCallback((e) => {
-    if (!isDragging || !boundingRef.current || !fabricCanvas) return;
+    if (!isDragging || !boundingRef.current || !fabricCanvas || !selectedObject) return;
 
     const canvasEl = fabricCanvas.getElement();
     const rect = canvasEl.getBoundingClientRect();
@@ -105,13 +101,21 @@ const AnchorPointOverlay = () => {
     const newAnchorX = Math.max(0, Math.min(1, (mouseX - bound.left) / bound.width));
     const newAnchorY = Math.max(0, Math.min(1, (mouseY - bound.top) / bound.height));
 
+    // ACTUALLY change the Fabric.js object's origin
+    // This moves the rotation handle and changes the pivot point
+    const fabricObject = findFabricObjectById(fabricCanvas, selectedObject);
+    if (fabricObject) {
+      changeAnchorPoint(fabricObject, newAnchorX, newAnchorY);
+      fabricCanvas.requestRenderAll();
+    }
+
     // Update overlay position
     setOverlayPos({
       x: bound.left + bound.width * newAnchorX,
       y: bound.top + bound.height * newAnchorY,
     });
 
-    // Store in canvasObjects for LivePreview/Export
+    // Store in canvasObjects for LivePreview/Export transform-origin
     setCanvasObjects(prev => prev.map(obj => 
       obj.id === selectedObject
         ? { ...obj, anchorX: newAnchorX, anchorY: newAnchorY }
@@ -139,6 +143,12 @@ const AnchorPointOverlay = () => {
     e.stopPropagation();
     e.preventDefault();
     
+    const fabricObject = findFabricObjectById(fabricCanvas, selectedObject);
+    if (fabricObject) {
+      changeAnchorPoint(fabricObject, 0.5, 0.5);
+      fabricCanvas.requestRenderAll();
+    }
+
     setCanvasObjects(prev => prev.map(obj => 
       obj.id === selectedObject
         ? { ...obj, anchorX: 0.5, anchorY: 0.5 }

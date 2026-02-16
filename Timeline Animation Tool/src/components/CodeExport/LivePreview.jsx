@@ -64,12 +64,7 @@ const LivePreview = () => {
 
   /**
    * Render a group.
-   * 
-   * Since groups are created with originX:'center', originY:'center':
-   * - Keyframe x/y = center of group = group.left/top
-   * - Group div positioned at (x, y) with 0x0 size, overflow visible
-   * - transformOrigin at 0,0 so scale/rotation pivot at the center point
-   * - Children positioned relative to group center
+   * Group div at center (x,y) with 0x0 size. transformOrigin at anchor offset.
    */
   const renderGroup = (obj, objKeyframes) => {
     const container = containerRef.current;
@@ -78,6 +73,10 @@ const LivePreview = () => {
     if (!fabricGroup) return;
     
     const firstKf = objKeyframes[0];
+
+    // Anchor point
+    const anchorX = obj.anchorX ?? 0.5;
+    const anchorY = obj.anchorY ?? 0.5;
 
     // Create group container div at center position
     const groupEl = document.createElement('div');
@@ -88,7 +87,15 @@ const LivePreview = () => {
     groupEl.style.width = '0px';
     groupEl.style.height = '0px';
     groupEl.style.overflow = 'visible';
-    groupEl.style.transformOrigin = '0px 0px';
+    
+    // Transform origin: for groups, 0px 0px = center of group.
+    // Anchor offset = (anchor - 0.5) * groupSize
+    const groupWidth = (fabricGroup.width || 0) * (fabricGroup.scaleX || 1);
+    const groupHeight = (fabricGroup.height || 0) * (fabricGroup.scaleY || 1);
+    const pivotOffsetX = (anchorX - 0.5) * groupWidth;
+    const pivotOffsetY = (anchorY - 0.5) * groupHeight;
+    groupEl.style.transformOrigin = `${pivotOffsetX}px ${pivotOffsetY}px`;
+    
     container.appendChild(groupEl);
 
     // Set initial transform state
@@ -105,7 +112,6 @@ const LivePreview = () => {
         const childObj = canvasObjects.find(o => o.id === fabricChild.id);
         if (!childObj) return;
         
-        // Child's left/top = offset from group center (both have center origin)
         const relLeft = fabricChild.left || 0;
         const relTop = fabricChild.top || 0;
         const childScaleX = fabricChild.scaleX || 1;
@@ -139,10 +145,6 @@ const LivePreview = () => {
 
   /**
    * Render a path child inside a group.
-   * 
-   * Path data is in local coordinates centered around pathOffset.
-   * We use SVG <g transform> to place the path so its center (pathOffset)
-   * appears at (relLeft, relTop) within the group div.
    */
   const renderPathChild = (fabricChild, relLeft, relTop, scaleX, scaleY, parentEl) => {
     const pathString = fabricPathToSVGPath(fabricChild.path);
@@ -151,7 +153,6 @@ const LivePreview = () => {
     const pathOffsetX = fabricChild.pathOffset?.x || 0;
     const pathOffsetY = fabricChild.pathOffset?.y || 0;
     
-    // Calculate translation: position path center at (relLeft, relTop)
     const tx = relLeft - pathOffsetX * scaleX;
     const ty = relTop - pathOffsetY * scaleY;
     
@@ -182,9 +183,6 @@ const LivePreview = () => {
 
   /**
    * Render a solid shape child (rect, circle, text) inside a group.
-   * 
-   * Child left/top = center offset from group center (both use center origin).
-   * CSS left/top needs to be the TOP-LEFT corner = center - halfSize.
    */
   const renderSolidChild = (fabricChild, childObj, relLeft, relTop, scaleX, scaleY, angle, parentEl) => {
     const el = document.createElement('div');
@@ -218,7 +216,6 @@ const LivePreview = () => {
       childHeight = (fabricChild.height || 24) * scaleY;
     }
 
-    // Center to top-left offset
     el.style.left = (relLeft - childWidth / 2) + 'px';
     el.style.top = (relTop - childHeight / 2) + 'px';
     
@@ -231,12 +228,26 @@ const LivePreview = () => {
 
   /**
    * Render a standalone path (not in a group).
-   * Uses full-canvas SVG, translates based on offset from first keyframe.
+   * 
+   * ANCHOR FIX: Calculate transform-origin in pixel coordinates.
+   * The SVG spans the full canvas (0,0 to CANVAS_WIDTH,CANVAS_HEIGHT).
+   * The path's visual center is at pathOffset. The anchor point is
+   * offset from the center by (anchor - 0.5) * objectSize.
+   * 
+   * This makes GSAP rotate the entire SVG around the anchor point
+   * instead of the default center of the SVG element.
    */
   const renderPath = (obj, objKeyframes) => {
     const container = containerRef.current;
     const timeline = timelineRef.current;
     if (objKeyframes.length === 0) return;
+
+    // Get Fabric object for geometry data
+    const fabricObject = fabricCanvas?.getObjects().find(o => o.id === obj.id);
+    
+    // Anchor values (0-1 range, relative to object bounding box)
+    const anchorX = obj.anchorX ?? 0.5;
+    const anchorY = obj.anchorY ?? 0.5;
 
     const el = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     el.id = obj.id;
@@ -247,6 +258,25 @@ const LivePreview = () => {
     el.style.pointerEvents = 'none';
     el.setAttribute('width', CANVAS_WIDTH);
     el.setAttribute('height', CANVAS_HEIGHT);
+
+    // Calculate transform-origin at the anchor point position
+    // pathOffset = center of the path data in SVG coordinates
+    // Object bounding box: width × height around the pathOffset
+    if (fabricObject) {
+      const pathOffsetX = fabricObject.pathOffset?.x || 0;
+      const pathOffsetY = fabricObject.pathOffset?.y || 0;
+      const objWidth = fabricObject.width || 0;
+      const objHeight = fabricObject.height || 0;
+      
+      // Pivot point in SVG pixel coordinates
+      // anchor 0 = left edge = pathOffset - width/2
+      // anchor 0.5 = center = pathOffset
+      // anchor 1 = right edge = pathOffset + width/2
+      const pivotX = pathOffsetX + (anchorX - 0.5) * objWidth;
+      const pivotY = pathOffsetY + (anchorY - 0.5) * objHeight;
+      
+      el.style.transformOrigin = `${pivotX}px ${pivotY}px`;
+    }
 
     const pathElement = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     pathElement.setAttribute('d', fabricPathToSVGPath(obj.pathData));
@@ -291,7 +321,7 @@ const LivePreview = () => {
 
   /**
    * Render a regular element (rectangle, circle, text).
-   * Keyframe x/y = center. CSS left/top = center - 50 (for 100x100 default).
+   * Anchor support via CSS transform-origin percentage.
    */
   const renderRegular = (obj, objKeyframes) => {
     const container = containerRef.current;
@@ -300,7 +330,6 @@ const LivePreview = () => {
 
     const firstKf = objKeyframes[0];
     
-    // Anchor point for transform-origin
     const anchorX = obj.anchorX ?? 0.5;
     const anchorY = obj.anchorY ?? 0.5;
 
@@ -328,7 +357,6 @@ const LivePreview = () => {
       el.style.whiteSpace = 'nowrap';
     }
 
-    // Center to top-left offset
     el.style.left = (firstKf.properties.x - halfW) + 'px';
     el.style.top = (firstKf.properties.y - halfH) + 'px';
     
