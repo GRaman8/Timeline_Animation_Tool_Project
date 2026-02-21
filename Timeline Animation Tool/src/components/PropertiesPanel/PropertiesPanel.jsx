@@ -34,7 +34,7 @@ const PropertiesPanel = () => {
   const [fabricCanvas] = useFabricCanvas();
   const [drawingMode] = useDrawingMode();
   const [anchorEditMode] = useAnchorEditMode();
-  const [canvasObjects] = useCanvasObjects();
+  const [canvasObjects, setCanvasObjects] = useCanvasObjects();
 
   const drawerWidth = 300;
 
@@ -61,11 +61,6 @@ const PropertiesPanel = () => {
     setProperties(prev => ({ ...prev, opacity: newValue }));
   };
 
-  /**
-   * Handle position change.
-   * Sets left/top directly — this is the origin point position.
-   * For center-origin: sets the center. For custom-anchor: sets the anchor.
-   */
   const handlePositionChange = (axis, value) => {
     if (!selectedObject || !fabricCanvas) return;
 
@@ -121,10 +116,72 @@ const PropertiesPanel = () => {
     if (props) setProperties(props);
   };
 
+  /**
+   * Handle fill color change for solid shapes (rectangle, circle, text).
+   * Updates the Fabric object's fill and stores it in canvasObjects state.
+   */
+  const handleFillColorChange = (e) => {
+    if (!selectedObject || !fabricCanvas) return;
+
+    const fabricObject = findFabricObjectById(fabricCanvas, selectedObject);
+    if (!fabricObject) return;
+
+    const newColor = e.target.value;
+    fabricObject.set('fill', newColor);
+    fabricCanvas.renderAll();
+
+    // Store in canvasObjects state for export/preview
+    setCanvasObjects(prev => prev.map(obj =>
+      obj.id === selectedObject
+        ? { ...obj, fill: newColor }
+        : obj
+    ));
+  };
+
+  /**
+   * Handle stroke color change for path objects.
+   */
+  const handleStrokeColorChange = (e) => {
+    if (!selectedObject || !fabricCanvas) return;
+
+    const fabricObject = findFabricObjectById(fabricCanvas, selectedObject);
+    if (!fabricObject) return;
+
+    const newColor = e.target.value;
+    fabricObject.set('stroke', newColor);
+    fabricCanvas.renderAll();
+
+    // Store in canvasObjects state
+    setCanvasObjects(prev => prev.map(obj =>
+      obj.id === selectedObject
+        ? { ...obj, strokeColor: newColor }
+        : obj
+    ));
+  };
+
   const objectData = canvasObjects.find(obj => obj.id === selectedObject);
   const anchorX = objectData?.anchorX ?? 0.5;
   const anchorY = objectData?.anchorY ?? 0.5;
   const hasCustomAnchor = Math.abs(anchorX - 0.5) > 0.01 || Math.abs(anchorY - 0.5) > 0.01;
+
+  // Get current fill color from fabric object or state
+  const getCurrentFillColor = () => {
+    if (!selectedObject || !fabricCanvas) return '#000000';
+    const fabricObject = findFabricObjectById(fabricCanvas, selectedObject);
+    if (!fabricObject) return '#000000';
+    return fabricObject.fill || objectData?.fill || '#000000';
+  };
+
+  const getCurrentStrokeColor = () => {
+    if (!selectedObject || !fabricCanvas) return '#000000';
+    const fabricObject = findFabricObjectById(fabricCanvas, selectedObject);
+    if (!fabricObject) return '#000000';
+    return fabricObject.stroke || objectData?.strokeColor || '#000000';
+  };
+
+  // Determine if the selected object is a solid shape (supports fill color)
+  const isSolidShape = objectData && ['rectangle', 'circle', 'text'].includes(objectData.type);
+  const isPath = objectData?.type === 'path';
 
   return (
     <Drawer
@@ -279,6 +336,54 @@ const PropertiesPanel = () => {
                     valueLabelFormat={(value) => `${(value * 100).toFixed(0)}%`}
                   />
                 </Box>
+
+                {/* COLOR PICKER for solid shapes */}
+                {isSolidShape && (
+                  <>
+                    <Divider />
+                    <Box>
+                      <Typography variant="body2" gutterBottom fontWeight={600}>
+                        🎨 Fill Color
+                      </Typography>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <TextField
+                          type="color"
+                          value={getCurrentFillColor()}
+                          onChange={handleFillColorChange}
+                          size="small"
+                          sx={{ width: 60, '& input': { cursor: 'pointer', p: 0.5, height: 36 } }}
+                        />
+                        <Typography variant="caption" color="text.secondary">
+                          {getCurrentFillColor()}
+                        </Typography>
+                      </Box>
+                    </Box>
+                  </>
+                )}
+
+                {/* STROKE COLOR PICKER for path/drawing objects */}
+                {isPath && (
+                  <>
+                    <Divider />
+                    <Box>
+                      <Typography variant="body2" gutterBottom fontWeight={600}>
+                        🖊️ Stroke Color
+                      </Typography>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <TextField
+                          type="color"
+                          value={getCurrentStrokeColor()}
+                          onChange={handleStrokeColorChange}
+                          size="small"
+                          sx={{ width: 60, '& input': { cursor: 'pointer', p: 0.5, height: 36 } }}
+                        />
+                        <Typography variant="caption" color="text.secondary">
+                          {getCurrentStrokeColor()}
+                        </Typography>
+                      </Box>
+                    </Box>
+                  </>
+                )}
               </Box>
               
               <Divider sx={{ my: 2 }} />

@@ -18,6 +18,15 @@ const fabricPathToSVGPath = (pathArray) => {
   return pathString.trim();
 };
 
+const getDefaultFillColor = (type) => {
+  switch (type) {
+    case 'rectangle': return '#3b82f6';
+    case 'circle': return '#ef4444';
+    case 'text': return '#000000';
+    default: return '#000000';
+  }
+};
+
 const LivePreview = () => {
   const [canvasObjects] = useCanvasObjects();
   const [keyframes] = useKeyframes();
@@ -48,7 +57,6 @@ const LivePreview = () => {
       if (rawKeyframes.length === 0) return;
       if (groupChildren.has(obj.id)) return;
 
-      // Normalize rotation to take shortest angular path
       const objKeyframes = normalizeKeyframeRotations(rawKeyframes);
 
       if (obj.type === 'group') {
@@ -86,6 +94,7 @@ const LivePreview = () => {
     groupEl.style.width = '0px';
     groupEl.style.height = '0px';
     groupEl.style.overflow = 'visible';
+    groupEl.style.zIndex = (firstKf.properties.zIndex ?? 0).toString();
     
     const groupWidth = (fabricGroup.width || 0) * (fabricGroup.scaleX || 1);
     const groupHeight = (fabricGroup.height || 0) * (fabricGroup.scaleY || 1);
@@ -132,6 +141,7 @@ const LivePreview = () => {
         scaleY: currKf.properties.scaleY,
         rotation: currKf.properties.rotation,
         opacity: currKf.properties.opacity,
+        zIndex: currKf.properties.zIndex ?? 0,
         ease: currKf.easing || 'none',
       }, prevKf.time);
     }
@@ -186,13 +196,14 @@ const LivePreview = () => {
 
     let childWidth = 0;
     let childHeight = 0;
+    const fillColor = childObj.fill || fabricChild.fill;
 
     if (fabricChild.type === 'rect' || fabricChild.type === 'rectangle') {
       childWidth = (fabricChild.width || 100) * scaleX;
       childHeight = (fabricChild.height || 100) * scaleY;
       el.style.width = childWidth + 'px';
       el.style.height = childHeight + 'px';
-      el.style.backgroundColor = fabricChild.fill || '#3b82f6';
+      el.style.backgroundColor = fillColor || '#3b82f6';
     } else if (fabricChild.type === 'circle') {
       const radius = fabricChild.radius || 50;
       childWidth = radius * 2 * scaleX;
@@ -200,11 +211,11 @@ const LivePreview = () => {
       el.style.width = childWidth + 'px';
       el.style.height = childHeight + 'px';
       el.style.borderRadius = '50%';
-      el.style.backgroundColor = fabricChild.fill || '#ef4444';
+      el.style.backgroundColor = fillColor || '#ef4444';
     } else if (fabricChild.type === 'text') {
       el.textContent = fabricChild.text || 'Text';
       el.style.fontSize = ((fabricChild.fontSize || 24) * scaleY) + 'px';
-      el.style.color = fabricChild.fill || '#000000';
+      el.style.color = fillColor || '#000000';
       el.style.whiteSpace = 'nowrap';
       childWidth = (fabricChild.width || 50) * scaleX;
       childHeight = (fabricChild.height || 24) * scaleY;
@@ -221,7 +232,12 @@ const LivePreview = () => {
   };
 
   /**
-   * Render a standalone path.
+   * Render a standalone path using wrapper div approach.
+   * 
+   * CRITICAL FIX: Uses a wrapper div with left/top for positioning,
+   * and the SVG is offset inside the wrapper so the pivot point is at (0,0).
+   * Rotation is applied to the wrapper via GSAP (no CSS translate involved).
+   * This decouples position from rotation completely.
    */
   const renderPath = (obj, objKeyframes) => {
     const container = containerRef.current;
@@ -232,28 +248,46 @@ const LivePreview = () => {
     
     const anchorX = obj.anchorX ?? 0.5;
     const anchorY = obj.anchorY ?? 0.5;
+    const firstKf = objKeyframes[0];
 
-    const el = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    el.id = obj.id;
-    el.style.position = 'absolute';
-    el.style.left = '0';
-    el.style.top = '0';
-    el.style.overflow = 'visible';
-    el.style.pointerEvents = 'none';
-    el.setAttribute('width', CANVAS_WIDTH);
-    el.setAttribute('height', CANVAS_HEIGHT);
-
+    // Get path geometry from fabric object
+    let pathOffsetX = 0;
+    let pathOffsetY = 0;
+    let objWidth = 0;
+    let objHeight = 0;
+    
     if (fabricObject) {
-      const pathOffsetX = fabricObject.pathOffset?.x || 0;
-      const pathOffsetY = fabricObject.pathOffset?.y || 0;
-      const objWidth = fabricObject.width || 0;
-      const objHeight = fabricObject.height || 0;
-      
-      const pivotX = pathOffsetX + (anchorX - 0.5) * objWidth;
-      const pivotY = pathOffsetY + (anchorY - 0.5) * objHeight;
-      
-      el.style.transformOrigin = `${pivotX}px ${pivotY}px`;
+      pathOffsetX = fabricObject.pathOffset?.x || 0;
+      pathOffsetY = fabricObject.pathOffset?.y || 0;
+      objWidth = fabricObject.width || 0;
+      objHeight = fabricObject.height || 0;
     }
+
+    // Pivot point in SVG coordinate space
+    const pivotX = pathOffsetX + (anchorX - 0.5) * objWidth;
+    const pivotY = pathOffsetY + (anchorY - 0.5) * objHeight;
+
+    // Create wrapper div - positioned at the keyframe position
+    const wrapper = document.createElement('div');
+    wrapper.id = obj.id;
+    wrapper.style.position = 'absolute';
+    wrapper.style.left = firstKf.properties.x + 'px';
+    wrapper.style.top = firstKf.properties.y + 'px';
+    wrapper.style.width = '0px';
+    wrapper.style.height = '0px';
+    wrapper.style.overflow = 'visible';
+    wrapper.style.transformOrigin = '0px 0px';
+    wrapper.style.zIndex = (firstKf.properties.zIndex ?? 0).toString();
+
+    // Create SVG inside wrapper, offset so pivot aligns with wrapper origin
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.style.position = 'absolute';
+    svg.style.left = (-pivotX) + 'px';
+    svg.style.top = (-pivotY) + 'px';
+    svg.style.overflow = 'visible';
+    svg.style.pointerEvents = 'none';
+    svg.setAttribute('width', CANVAS_WIDTH);
+    svg.setAttribute('height', CANVAS_HEIGHT);
 
     const pathElement = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     pathElement.setAttribute('d', fabricPathToSVGPath(obj.pathData));
@@ -263,36 +297,33 @@ const LivePreview = () => {
     pathElement.setAttribute('stroke-linecap', 'round');
     pathElement.setAttribute('stroke-linejoin', 'round');
 
-    el.appendChild(pathElement);
-    container.appendChild(el);
+    svg.appendChild(pathElement);
+    wrapper.appendChild(svg);
+    container.appendChild(wrapper);
 
-    if (objKeyframes.length >= 2) {
-      const firstKf = objKeyframes[0];
-      const baseX = firstKf.properties.x;
-      const baseY = firstKf.properties.y;
+    // Set initial transform (rotation, scale, opacity only - no x/y translate!)
+    gsap.set(wrapper, {
+      scaleX: firstKf.properties.scaleX,
+      scaleY: firstKf.properties.scaleY,
+      rotation: firstKf.properties.rotation,
+      opacity: firstKf.properties.opacity,
+    });
 
-      gsap.set(el, {
-        x: 0, y: 0,
-        scaleX: firstKf.properties.scaleX,
-        scaleY: firstKf.properties.scaleY,
-        rotation: firstKf.properties.rotation,
-        opacity: firstKf.properties.opacity,
-      });
-
-      for (let i = 1; i < objKeyframes.length; i++) {
-        const prevKf = objKeyframes[i - 1];
-        const currKf = objKeyframes[i];
-        timeline.to(el, {
-          duration: currKf.time - prevKf.time,
-          x: currKf.properties.x - baseX,
-          y: currKf.properties.y - baseY,
-          scaleX: currKf.properties.scaleX,
-          scaleY: currKf.properties.scaleY,
-          rotation: currKf.properties.rotation,
-          opacity: currKf.properties.opacity,
-          ease: currKf.easing || 'none',
-        }, prevKf.time);
-      }
+    // Animate using left/top (not x/y)
+    for (let i = 1; i < objKeyframes.length; i++) {
+      const prevKf = objKeyframes[i - 1];
+      const currKf = objKeyframes[i];
+      timeline.to(wrapper, {
+        duration: currKf.time - prevKf.time,
+        left: currKf.properties.x + 'px',
+        top: currKf.properties.y + 'px',
+        scaleX: currKf.properties.scaleX,
+        scaleY: currKf.properties.scaleY,
+        rotation: currKf.properties.rotation,
+        opacity: currKf.properties.opacity,
+        zIndex: currKf.properties.zIndex ?? 0,
+        ease: currKf.easing || 'none',
+      }, prevKf.time);
     }
   };
 
@@ -310,26 +341,28 @@ const LivePreview = () => {
     const anchorY = obj.anchorY ?? 0.5;
     const elWidth = 100;
     const elHeight = 100;
+    const fillColor = obj.fill || getDefaultFillColor(obj.type);
 
     const el = document.createElement('div');
     el.id = obj.id;
     el.style.position = 'absolute';
     el.style.transformOrigin = `${anchorX * 100}% ${anchorY * 100}%`;
+    el.style.zIndex = (firstKf.properties.zIndex ?? 0).toString();
 
     if (obj.type === 'rectangle') {
       el.style.width = elWidth + 'px';
       el.style.height = elHeight + 'px';
-      el.style.backgroundColor = '#3b82f6';
+      el.style.backgroundColor = fillColor;
     } else if (obj.type === 'circle') {
       el.style.width = elWidth + 'px';
       el.style.height = elHeight + 'px';
       el.style.borderRadius = '50%';
-      el.style.backgroundColor = '#ef4444';
+      el.style.backgroundColor = fillColor;
     } else if (obj.type === 'text') {
       const fabricObject = fabricCanvas?.getObjects().find(o => o.id === obj.id);
       el.textContent = fabricObject?.text || obj.textContent || 'Text';
       el.style.fontSize = '24px';
-      el.style.color = '#000000';
+      el.style.color = fillColor;
       el.style.whiteSpace = 'nowrap';
     }
 
@@ -356,6 +389,7 @@ const LivePreview = () => {
         scaleY: currKf.properties.scaleY,
         rotation: currKf.properties.rotation,
         opacity: currKf.properties.opacity,
+        zIndex: currKf.properties.zIndex ?? 0,
         ease: currKf.easing || 'none',
       }, prevKf.time);
     }

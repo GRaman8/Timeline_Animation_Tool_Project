@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Paper, Box } from '@mui/material';
+import { Paper, Box, Typography, Chip } from '@mui/material';
 import * as fabric from 'fabric';
 
 import { 
@@ -20,13 +20,15 @@ import {
   extractPropertiesFromFabricObject,
   findFabricObjectById,
   createPathFromPoints,
+  createCompoundPathFromStrokes,
   ungroupFabricGroup,
 } from '../../utils/fabricHelpers';
 
 import { 
   findSurroundingKeyframes, 
   interpolateProperties, 
-  applyPropertiesToFabricObject 
+  applyPropertiesToFabricObject,
+  applyZIndexOrdering,
 } from '../../utils/interpolation';
 
 import AnchorPointOverlay from './AnchorPointOverlay';
@@ -51,9 +53,15 @@ const Canvas = () => {
   const [isInteracting, setIsInteracting] = useState(false);
   const interactingObjectRef = useRef(null);
 
+  // --- Multi-stroke drawing state ---
   const isDrawingRef = useRef(false);
   const drawingPointsRef = useRef([]);
   const tempPathRef = useRef(null);
+  // Accumulated strokes (each is an array of points)
+  const committedStrokesRef = useRef([]);
+  // Fabric paths for committed strokes (visual only, non-selectable)
+  const committedStrokePathsRef = useRef([]);
+  const [strokeCount, setStrokeCount] = useState(0);
 
   // Initialize Fabric.js canvas
   useEffect(() => {
@@ -173,7 +181,88 @@ const Canvas = () => {
     };
   }, []);
 
-  // Drawing mode handler
+  /**
+   * Commit all accumulated strokes as a single compound path object.
+   * Called by Enter key or "Finish Drawing" button.
+   */
+  const commitDrawing = () => {
+    if (!fabricCanvas) return;
+    
+    const strokes = committedStrokesRef.current;
+    if (strokes.length === 0) return;
+
+    // Remove visual stroke previews from canvas
+    committedStrokePathsRef.current.forEach(p => {
+      try { fabricCanvas.remove(p); } catch(e) {}
+    });
+    committedStrokePathsRef.current = [];
+
+    // Create compound path from all strokes
+    const id = `path_${Date.now()}`;
+    const count = canvasObjects.filter(obj => obj.type === 'path').length + 1;
+    const name = `Drawing_${count}`;
+
+    let pathObject;
+    if (strokes.length === 1) {
+      pathObject = createPathFromPoints(strokes[0], id, drawingSettings);
+    } else {
+      pathObject = createCompoundPathFromStrokes(strokes, id, drawingSettings);
+    }
+
+    if (pathObject) {
+      fabricCanvas.add(pathObject);
+      fabricCanvas.setActiveObject(pathObject);
+      fabricCanvas.renderAll();
+
+      setCanvasObjects(prev => [...prev, {
+        id, type: 'path', name,
+        pathData: pathObject.path,
+        strokeColor: drawingSettings.color,
+        strokeWidth: drawingSettings.strokeWidth,
+        boundingBox: { width: pathObject.width, height: pathObject.height }
+      }]);
+      setKeyframes(prev => ({ ...prev, [id]: [] }));
+    }
+
+    // Reset stroke accumulator
+    committedStrokesRef.current = [];
+    setStrokeCount(0);
+  };
+
+  /**
+   * Cancel all accumulated strokes without committing.
+   */
+  const cancelDrawing = () => {
+    if (!fabricCanvas) return;
+    
+    // Remove visual stroke previews
+    committedStrokePathsRef.current.forEach(p => {
+      try { fabricCanvas.remove(p); } catch(e) {}
+    });
+    committedStrokePathsRef.current = [];
+    committedStrokesRef.current = [];
+    
+    if (tempPathRef.current) {
+      fabricCanvas.remove(tempPathRef.current);
+      tempPathRef.current = null;
+    }
+    
+    isDrawingRef.current = false;
+    drawingPointsRef.current = [];
+    setStrokeCount(0);
+    fabricCanvas.renderAll();
+  };
+
+  // Expose commitDrawing for external use (Toolbar button)
+  useEffect(() => {
+    if (fabricCanvas) {
+      fabricCanvas._commitDrawing = commitDrawing;
+      fabricCanvas._cancelDrawing = cancelDrawing;
+      fabricCanvas._getStrokeCount = () => committedStrokesRef.current.length;
+    }
+  }, [fabricCanvas, canvasObjects, drawingSettings]);
+
+  // Multi-stroke drawing mode handler
   useEffect(() => {
     if (!fabricCanvas) return;
 
@@ -190,6 +279,7 @@ const Canvas = () => {
         strokeLineCap: 'round',
         strokeLineJoin: 'round',
         selectable: false,
+        evented: false,
       });
       fabricCanvas.add(tempPathRef.current);
     };
@@ -212,6 +302,7 @@ const Canvas = () => {
           strokeLineCap: 'round',
           strokeLineJoin: 'round',
           selectable: false,
+          evented: false,
         });
         fabricCanvas.add(tempPathRef.current);
         fabricCanvas.renderAll();
@@ -222,60 +313,76 @@ const Canvas = () => {
       if (!drawingMode || !isDrawingRef.current) return;
       isDrawingRef.current = false;
       
+      // Remove temp preview
       if (tempPathRef.current) {
         fabricCanvas.remove(tempPathRef.current);
         tempPathRef.current = null;
       }
       
       if (drawingPointsRef.current.length > 2) {
-        const id = `path_${Date.now()}`;
-        const count = canvasObjects.filter(obj => obj.type === 'path').length + 1;
-        const name = `Drawing_${count}`;
+        const points = [...drawingPointsRef.current];
         
-        const pathObject = createPathFromPoints(drawingPointsRef.current, id, drawingSettings);
+        // Store this stroke
+        committedStrokesRef.current.push(points);
+        setStrokeCount(committedStrokesRef.current.length);
         
-        if (pathObject) {
-          fabricCanvas.add(pathObject);
-          fabricCanvas.setActiveObject(pathObject);
+        // Add a visual preview of this committed stroke (non-selectable, dimmed)
+        const previewPath = createPathFromPoints(points, `preview_${Date.now()}`, {
+          ...drawingSettings,
+          color: drawingSettings.color,
+        });
+        if (previewPath) {
+          previewPath.set({
+            selectable: false,
+            evented: false,
+            opacity: 0.6,
+          });
+          fabricCanvas.add(previewPath);
+          committedStrokePathsRef.current.push(previewPath);
           fabricCanvas.renderAll();
-          
-          setCanvasObjects(prev => [...prev, { 
-            id, type: 'path', name,
-            pathData: pathObject.path,
-            strokeColor: drawingSettings.color,
-            strokeWidth: drawingSettings.strokeWidth,
-            boundingBox: { width: pathObject.width, height: pathObject.height }
-          }]);
-          setKeyframes(prev => ({ ...prev, [id]: [] }));
         }
       }
+      
       drawingPointsRef.current = [];
     };
 
     const handleKeyDown = (e) => {
-      if (e.key === 'Escape' && drawingMode) {
+      if (!drawingMode) return;
+      
+      if (e.key === 'Enter') {
+        // Commit all strokes as one object
+        e.preventDefault();
+        commitDrawing();
+        return;
+      }
+      
+      if (e.key === 'Escape') {
+        // Cancel drawing and exit mode
+        cancelDrawing();
         setDrawingMode(false);
-        if (tempPathRef.current) {
-          fabricCanvas.remove(tempPathRef.current);
-          tempPathRef.current = null;
-          fabricCanvas.renderAll();
-        }
-        isDrawingRef.current = false;
-        drawingPointsRef.current = [];
+        return;
       }
     };
 
     if (drawingMode) {
       fabricCanvas.selection = false;
       fabricCanvas.forEachObject(obj => {
-        obj.selectable = false;
-        obj.evented = false;
+        // Don't disable preview strokes
+        if (!obj.id?.startsWith('preview_')) {
+          obj.selectable = false;
+          obj.evented = false;
+        }
       });
       fabricCanvas.on('mouse:down', handleMouseDown);
       fabricCanvas.on('mouse:move', handleMouseMove);
       fabricCanvas.on('mouse:up', handleMouseUp);
       window.addEventListener('keydown', handleKeyDown);
     } else {
+      // When exiting drawing mode, commit any pending strokes
+      if (committedStrokesRef.current.length > 0) {
+        commitDrawing();
+      }
+      
       fabricCanvas.selection = true;
       fabricCanvas.forEachObject(obj => {
         obj.selectable = true;
@@ -310,7 +417,7 @@ const Canvas = () => {
     }
   };
 
-  // Canvas update - handle visibility and interpolation during playback
+  // Canvas update - handle visibility, interpolation, and zIndex during playback
   useEffect(() => {
     if (!fabricCanvas) return;
     if (isInteracting) return;
@@ -351,6 +458,9 @@ const Canvas = () => {
           applyPropertiesToFabricObject(fabricObject, interpolated);
         }
       });
+
+      // Apply z-index ordering after all objects are updated
+      applyZIndexOrdering(fabricCanvas);
     }
 
     fabricCanvas.renderAll();
@@ -361,7 +471,6 @@ const Canvas = () => {
     if (!fabricCanvas) return;
     if (isInteracting) return;
 
-    // If there's a selected object, make sure it's active in the canvas
     if (selectedObject && !isPlaying) {
       const fabricObject = findFabricObjectById(fabricCanvas, selectedObject);
       if (fabricObject && fabricCanvas.getActiveObject() !== fabricObject) {
@@ -381,27 +490,21 @@ const Canvas = () => {
           const objectsList = [...activeObjects];
           const childIds = objectsList.map(obj => obj.id);
           
-          // 1. Discard selection first
           fabricCanvas.discardActiveObject();
-          
-          // 2. Remove each object from canvas
           objectsList.forEach(obj => fabricCanvas.remove(obj));
           
-          // 3. Create group with CENTER ORIGIN (critical for consistent left/top = center)
           const group = new fabric.Group(objectsList, {
             id: `group_${Date.now()}`,
             originX: 'center',
             originY: 'center',
           });
           
-          // 4. Add group to canvas
           fabricCanvas.add(group);
           fabricCanvas.setActiveObject(group);
           fabricCanvas.renderAll();
 
           const groupCount = canvasObjects.filter(obj => obj.type === 'group').length + 1;
           
-          // Remove children's keyframes, add group's empty keyframes
           setKeyframes(prev => {
             const updated = { ...prev };
             childIds.forEach(childId => { delete updated[childId]; });
@@ -409,7 +512,6 @@ const Canvas = () => {
             return updated;
           });
           
-          // Add group to state (keep children in state for reference)
           setCanvasObjects(prev => [...prev, {
             id: group.id,
             type: 'group',
@@ -430,18 +532,14 @@ const Canvas = () => {
         const group = fabricCanvas.getObjects().find(obj => obj.id === selectedObject);
         if (!group || group.type !== 'group') return;
 
-        // Use robust ungrouping helper
         const restoredItems = ungroupFabricGroup(fabricCanvas, group);
         
         if (restoredItems.length > 0) {
-          // Remove group from canvasObjects state
           setCanvasObjects(prev => prev.filter(obj => obj.id !== selectedObject));
           
-          // Remove group's keyframes
           setKeyframes(prev => {
             const updated = { ...prev };
             delete updated[selectedObject];
-            // Ensure each child has a keyframes entry (even if empty)
             restoredItems.forEach(item => {
               if (item.id && updated[item.id] === undefined) {
                 updated[item.id] = [];
@@ -452,7 +550,6 @@ const Canvas = () => {
           
           setSelectedObject(null);
           
-          // Force all objects to be visible and interactive
           setTimeout(() => {
             fabricCanvas.forEachObject(obj => {
               obj.visible = true;
@@ -507,7 +604,36 @@ const Canvas = () => {
   }, [fabricCanvas, drawingMode, canvasObjects, setCanvasObjects, setKeyframes, setSelectedObject, selectedObject]);
 
   return (
-    <Box sx={{ mb: 2, display: 'flex', justifyContent: 'center', position: 'relative' }}>
+    <Box sx={{ mb: 2, display: 'flex', flexDirection: 'column', alignItems: 'center', position: 'relative' }}>
+      {/* Drawing mode indicator */}
+      {drawingMode && (
+        <Box sx={{ 
+          display: 'flex', 
+          alignItems: 'center', 
+          gap: 1, 
+          mb: 1,
+          p: 1,
+          bgcolor: 'warning.light',
+          borderRadius: 1,
+          width: '100%',
+          maxWidth: CANVAS_WIDTH,
+        }}>
+          <Typography variant="body2" fontWeight={600}>
+            🎨 Drawing Mode
+          </Typography>
+          {strokeCount > 0 && (
+            <Chip 
+              label={`${strokeCount} stroke${strokeCount !== 1 ? 's' : ''}`} 
+              size="small" 
+              color="primary" 
+            />
+          )}
+          <Typography variant="caption" color="text.secondary" sx={{ ml: 'auto' }}>
+            Draw strokes • Press <strong>Enter</strong> to finish • <strong>Esc</strong> to cancel
+          </Typography>
+        </Box>
+      )}
+      
       <Paper elevation={3} sx={{ display: 'inline-block', position: 'relative' }}>
         <canvas ref={canvasRef} />
         <AnchorPointOverlay />
