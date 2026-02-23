@@ -342,7 +342,6 @@ const Canvas = () => {
           fabricCanvas.renderAll();
         }
       }
-      
       drawingPointsRef.current = [];
     };
 
