@@ -1,4 +1,5 @@
 /**
+ * 
  * Code Generator - Produces standalone HTML/CSS/JS animation
  * 
  * CRITICAL FIX (v3): Path elements now use left/top for positioning instead
