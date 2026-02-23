@@ -338,34 +338,6 @@ const Toolbar = () => {
           <AnchorIcon />
         </IconButton>
       </Tooltip>
-
-      <Tooltip title={anchorEditMode ? "Exit Anchor Mode" : "Edit Anchor Point (Rotation Pivot)"} placement="right">
-        <IconButton 
-          onClick={() => setAnchorEditMode(!anchorEditMode)} 
-          color={anchorEditMode ? "secondary" : "primary"}
-          disabled={!selectedObject}
-        >
-          <AnchorIcon />
-        </IconButton>
-      </Tooltip>
-      
-      <Divider sx={{ my: 1 }} />
-      
-      <Tooltip title="Group Selected (Cmd/Ctrl+G)" placement="right">
-        <span>
-          <IconButton onClick={groupObjects} disabled={!canGroup} color="primary">
-            <GroupIcon />
-          </IconButton>
-        </span>
-      </Tooltip>
-      
-      <Tooltip title="Ungroup (Cmd/Ctrl+Shift+G)" placement="right">
-        <span>
-          <IconButton onClick={ungroupObjects} disabled={!canUngroup} color="primary">
-            <UngroupIcon />
-          </IconButton>
-        </span>
-      </Tooltip>
       
       <Divider sx={{ my: 1 }} />
       
