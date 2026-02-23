@@ -3,8 +3,9 @@ import * as fabric from 'fabric';
 /**
  * Create a new Fabric.js object based on type.
  * ALL objects use originX:'center', originY:'center' so left/top = center.
+ * Now accepts optional fill color.
  */
-export const createFabricObject = (type, id) => {
+export const createFabricObject = (type, id, options = {}) => {
   const baseProps = {
     id,
     left: 100,
@@ -19,21 +20,21 @@ export const createFabricObject = (type, id) => {
         ...baseProps,
         width: 100,
         height: 100,
-        fill: '#3b82f6',
+        fill: options.fill || '#3b82f6',
       });
     
     case 'circle':
       return new fabric.Circle({
         ...baseProps,
         radius: 50,
-        fill: '#ef4444',
+        fill: options.fill || '#ef4444',
       });
     
     case 'text':
       return new fabric.Text('Text', {
         ...baseProps,
         fontSize: 24,
-        fill: '#000000',
+        fill: options.fill || '#000000',
       });
     
     case 'path':
@@ -45,7 +46,7 @@ export const createFabricObject = (type, id) => {
 };
 
 /**
- * Create a path object from drawn points
+ * Create a path object from drawn points (single stroke)
  */
 export const createPathFromPoints = (points, id, settings) => {
   if (points.length < 2) return null;
@@ -82,21 +83,72 @@ export const createPathFromPoints = (points, id, settings) => {
 };
 
 /**
+ * Create a COMPOUND path from multiple stroke arrays.
+ * Each stroke is an array of points. All strokes become subpaths
+ * in a single SVG path (separated by M commands).
+ * This allows drawing a complex shape (like a dumbbell) in multiple 
+ * strokes that become ONE timeline object.
+ */
+export const createCompoundPathFromStrokes = (strokes, id, settings) => {
+  if (!strokes || strokes.length === 0) return null;
+
+  let pathString = '';
+
+  strokes.forEach((points, strokeIndex) => {
+    if (points.length < 2) return;
+
+    if (pathString.length > 0) pathString += ' ';
+
+    pathString += `M ${points[0].x} ${points[0].y}`;
+
+    if (settings.smoothing && points.length > 2) {
+      for (let i = 1; i < points.length - 1; i++) {
+        const xc = (points[i].x + points[i + 1].x) / 2;
+        const yc = (points[i].y + points[i + 1].y) / 2;
+        pathString += ` Q ${points[i].x} ${points[i].y}, ${xc} ${yc}`;
+      }
+      const lastPoint = points[points.length - 1];
+      pathString += ` L ${lastPoint.x} ${lastPoint.y}`;
+    } else {
+      for (let i = 1; i < points.length; i++) {
+        pathString += ` L ${points[i].x} ${points[i].y}`;
+      }
+    }
+  });
+
+  if (!pathString) return null;
+
+  const path = new fabric.Path(pathString, {
+    id,
+    stroke: settings.color,
+    strokeWidth: settings.strokeWidth,
+    fill: '',
+    strokeLineCap: 'round',
+    strokeLineJoin: 'round',
+    selectable: true,
+    originX: 'center',
+    originY: 'center',
+  });
+
+  return path;
+};
+
+/**
  * Extract properties from a Fabric.js object.
  * 
- * USES left/top DIRECTLY — this is the ORIGIN POINT position:
- * - For center-origin objects: left/top = center (same as getCenterPoint)
- * - For custom-anchor objects: left/top = anchor/pivot position
- * 
- * WHY THIS MATTERS FOR PENDULUM/ROTATION:
- * When rotating around a custom anchor, the anchor stays fixed but the
- * center moves. getCenterPoint() would capture that moving center,
- * creating phantom x/y offsets that cause double-movement in exports.
- * Using left/top (= anchor position) means pure rotation produces
- * zero x/y change — exactly what we want.
+ * USES left/top DIRECTLY — this is the ORIGIN POINT position.
+ * Also extracts zIndex from canvas object order.
  */
 export const extractPropertiesFromFabricObject = (fabricObject) => {
   if (!fabricObject) return null;
+
+  // Get zIndex from canvas object order
+  let zIndex = 0;
+  if (fabricObject.canvas) {
+    const objects = fabricObject.canvas.getObjects();
+    zIndex = objects.indexOf(fabricObject);
+    if (zIndex < 0) zIndex = 0;
+  }
 
   const baseProps = {
     x: fabricObject.left || 0,
@@ -105,6 +157,7 @@ export const extractPropertiesFromFabricObject = (fabricObject) => {
     scaleY: fabricObject.scaleY || 1,
     rotation: fabricObject.angle || 0,
     opacity: fabricObject.opacity !== undefined ? fabricObject.opacity : 1,
+    zIndex,
   };
   
   if (fabricObject.type === 'path') {
@@ -193,21 +246,14 @@ export const ungroupFabricGroup = (fabricCanvas, group) => {
 
 /**
  * Change the anchor/pivot point of a Fabric.js object.
- * 
- * 1. centeredRotation = false → rotation uses origin as pivot
- * 2. Changes originX/originY → moves where the pivot is
- * 3. Repositions mtr control → moves the rotation handle visually
- * 4. Compensates left/top → object doesn't visually jump
  */
 export const changeAnchorPoint = (fabricObject, anchorX, anchorY) => {
   if (!fabricObject) return;
   
-  // Save current visual center BEFORE changing anything
   const currentCenter = fabricObject.getCenterPoint();
   
   const isCenter = Math.abs(anchorX - 0.5) < 0.01 && Math.abs(anchorY - 0.5) < 0.01;
   
-  // Create per-object controls copy (only once)
   if (!fabricObject._hasCustomControls) {
     fabricObject.controls = Object.assign({}, fabricObject.controls);
     fabricObject._hasCustomControls = true;
@@ -250,7 +296,6 @@ export const changeAnchorPoint = (fabricObject, anchorX, anchorY) => {
     });
   }
   
-  // Compensate position: keep visual CENTER at the same spot
   fabricObject.setPositionByOrigin(
     new fabric.Point(currentCenter.x, currentCenter.y),
     'center',

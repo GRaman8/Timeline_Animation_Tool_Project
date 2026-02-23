@@ -1,11 +1,13 @@
-import React from 'react';
+import React, { useState } from 'react';
 
 import { 
   Box, 
   IconButton, 
   Divider, 
   Tooltip, 
-  Paper 
+  Paper,
+  Button,
+  Badge,
 } from '@mui/material';
 
 import {
@@ -19,6 +21,7 @@ import {
   GroupAdd as GroupIcon,
   GroupRemove as UngroupIcon,
   GpsFixed as AnchorIcon,
+  Check as CheckIcon,
 } from '@mui/icons-material';
 
 import { 
@@ -42,6 +45,7 @@ const Toolbar = () => {
   const [hasActiveSelection] = useHasActiveSelection();
   const [drawingMode, setDrawingMode] = useDrawingMode();
   const [anchorEditMode, setAnchorEditMode] = useAnchorEditMode();
+  const [strokeCount, setStrokeCount] = useState(0);
 
   const canGroup = fabricCanvas?.getActiveObjects().length > 1;
   
@@ -50,6 +54,19 @@ const Toolbar = () => {
     const obj = fabricCanvas.getObjects().find(o => o.id === selectedObject);
     return obj?.type === 'group';
   }, [fabricCanvas, selectedObject]);
+
+  // Poll stroke count when in drawing mode
+  React.useEffect(() => {
+    if (!drawingMode || !fabricCanvas) {
+      setStrokeCount(0);
+      return;
+    }
+    const interval = setInterval(() => {
+      const count = fabricCanvas._getStrokeCount?.() || 0;
+      setStrokeCount(count);
+    }, 200);
+    return () => clearInterval(interval);
+  }, [drawingMode, fabricCanvas]);
 
   const addElement = (type) => {
     if (!fabricCanvas) return;
@@ -65,7 +82,11 @@ const Toolbar = () => {
     fabricCanvas.setActiveObject(fabricObject);
     fabricCanvas.renderAll();
 
-    setCanvasObjects(prev => [...prev, { id, type, name, textContent: type === 'text' ? 'Text' : undefined }]);
+    setCanvasObjects(prev => [...prev, { 
+      id, type, name, 
+      textContent: type === 'text' ? 'Text' : undefined,
+      fill: fabricObject.fill, // Store initial fill color
+    }]);
     setKeyframes(prev => ({ ...prev, [id]: [] }));
   };
 
@@ -81,7 +102,6 @@ const Toolbar = () => {
     fabricCanvas.discardActiveObject();
     objectsList.forEach(obj => fabricCanvas.remove(obj));
     
-    // CRITICAL: Create group with center origin
     const group = new fabric.Group(objectsList, {
       id: `group_${Date.now()}`,
       originX: 'center',
@@ -189,30 +209,67 @@ const Toolbar = () => {
     setSelectedObject(null);
   };
 
+  /**
+   * FIXED: Use Fabric.js v6 API for layer ordering.
+   * v5 used canvas.bringForward() / canvas.sendBackwards()
+   * v6 uses canvas.bringObjectForward() / canvas.sendObjectBackwards()
+   */
   const moveLayer = (direction) => {
     if (!fabricCanvas) return;
     
-    const activeObjects = fabricCanvas.getActiveObjects();
-    if (activeObjects.length === 0 && selectedObject) {
-      const fabricObject = fabricCanvas.getObjects().find(obj => obj.id === selectedObject);
-      if (fabricObject) activeObjects.push(fabricObject);
+    let targetObject = null;
+    
+    // Get the selected object (either from active selection or selectedObject state)
+    const activeObj = fabricCanvas.getActiveObject();
+    if (activeObj && activeObj.id) {
+      targetObject = activeObj;
+    } else if (selectedObject) {
+      targetObject = fabricCanvas.getObjects().find(obj => obj.id === selectedObject);
     }
-    if (activeObjects.length === 0) return;
+    
+    if (!targetObject) return;
 
-    activeObjects.forEach(fabricObject => {
-      if (direction === 'up') fabricCanvas.bringForward(fabricObject);
-      else fabricCanvas.sendBackwards(fabricObject);
-    });
+    try {
+      if (direction === 'up') {
+        // Try Fabric v6 API first, fall back to v5
+        if (typeof fabricCanvas.bringObjectForward === 'function') {
+          fabricCanvas.bringObjectForward(targetObject);
+        } else if (typeof fabricCanvas.bringForward === 'function') {
+          fabricCanvas.bringForward(targetObject);
+        }
+      } else {
+        if (typeof fabricCanvas.sendObjectBackwards === 'function') {
+          fabricCanvas.sendObjectBackwards(targetObject);
+        } else if (typeof fabricCanvas.sendBackwards === 'function') {
+          fabricCanvas.sendBackwards(targetObject);
+        }
+      }
+    } catch (e) {
+      console.warn('Layer ordering failed:', e);
+    }
+    
     fabricCanvas.renderAll();
   };
 
   const toggleDrawingMode = () => {
     if (!fabricCanvas) return;
+    
+    // If exiting drawing mode and there are pending strokes, commit them
+    if (drawingMode && fabricCanvas._commitDrawing) {
+      fabricCanvas._commitDrawing();
+    }
+    
     setDrawingMode(!drawingMode);
     if (!drawingMode) {
       fabricCanvas.discardActiveObject();
       fabricCanvas.renderAll();
       setSelectedObject(null);
+    }
+  };
+
+  const finishDrawing = () => {
+    if (fabricCanvas?._commitDrawing) {
+      fabricCanvas._commitDrawing();
     }
   };
 
@@ -250,7 +307,35 @@ const Toolbar = () => {
           onClick={toggleDrawingMode} 
           color={drawingMode ? "secondary" : "primary"}
         >
-          <BrushIcon />
+          <Badge badgeContent={strokeCount > 0 ? strokeCount : 0} color="error">
+            <BrushIcon />
+          </Badge>
+        </IconButton>
+      </Tooltip>
+
+      {/* Finish Drawing button - only visible in drawing mode with pending strokes */}
+      {drawingMode && strokeCount > 0 && (
+        <Tooltip title="Finish Drawing (Enter)" placement="right">
+          <IconButton 
+            onClick={finishDrawing} 
+            color="success"
+            sx={{ 
+              bgcolor: 'success.light', 
+              '&:hover': { bgcolor: 'success.main', color: 'white' } 
+            }}
+          >
+            <CheckIcon />
+          </IconButton>
+        </Tooltip>
+      )}
+
+      <Tooltip title={anchorEditMode ? "Exit Anchor Mode" : "Edit Anchor Point (Rotation Pivot)"} placement="right">
+        <IconButton 
+          onClick={() => setAnchorEditMode(!anchorEditMode)} 
+          color={anchorEditMode ? "secondary" : "primary"}
+          disabled={!selectedObject}
+        >
+          <AnchorIcon />
         </IconButton>
       </Tooltip>
 
@@ -284,6 +369,24 @@ const Toolbar = () => {
       
       <Divider sx={{ my: 1 }} />
       
+      <Tooltip title="Group Selected (Cmd/Ctrl+G)" placement="right">
+        <span>
+          <IconButton onClick={groupObjects} disabled={!canGroup} color="primary">
+            <GroupIcon />
+          </IconButton>
+        </span>
+      </Tooltip>
+      
+      <Tooltip title="Ungroup (Cmd/Ctrl+Shift+G)" placement="right">
+        <span>
+          <IconButton onClick={ungroupObjects} disabled={!canUngroup} color="primary">
+            <UngroupIcon />
+          </IconButton>
+        </span>
+      </Tooltip>
+      
+      <Divider sx={{ my: 1 }} />
+      
       <Tooltip title="Delete Selected" placement="right">
         <span>
           <IconButton onClick={deleteObject} disabled={!hasActiveSelection} color="error">
@@ -294,7 +397,7 @@ const Toolbar = () => {
       
       <Tooltip title="Bring Forward" placement="right">
         <span>
-          <IconButton onClick={() => moveLayer('up')} disabled={!hasActiveSelection}>
+          <IconButton onClick={() => moveLayer('up')} disabled={!hasActiveSelection && !selectedObject}>
             <ArrowUpIcon />
           </IconButton>
         </span>
@@ -302,7 +405,7 @@ const Toolbar = () => {
       
       <Tooltip title="Send Backward" placement="right">
         <span>
-          <IconButton onClick={() => moveLayer('down')} disabled={!hasActiveSelection}>
+          <IconButton onClick={() => moveLayer('down')} disabled={!hasActiveSelection && !selectedObject}>
             <ArrowDownIcon />
           </IconButton>
         </span>

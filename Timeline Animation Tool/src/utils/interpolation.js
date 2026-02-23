@@ -9,10 +9,6 @@ export const lerp = (start, end, t) => {
 
 /**
  * Normalize an angle delta to [-180, 180] so animations take the shortest path.
- * 
- * Example: 0° to 289° → delta 289 → normalized to -71° (short counterclockwise)
- * Without this: GSAP/lerp animates 289° clockwise (nearly full rotation)
- * With this: animates 71° counterclockwise (correct pendulum swing)
  */
 const normalizeAngle = (prevAngle, nextAngle) => {
   let delta = nextAngle - prevAngle;
@@ -44,6 +40,7 @@ export const findSurroundingKeyframes = (keyframes, time) => {
 /**
  * Interpolate properties between two keyframes at a given time with easing.
  * Rotation is normalized to take the shortest angular path.
+ * zIndex is included and rounded to integer (step interpolation).
  */
 export const interpolateProperties = (beforeKf, afterKf, time, easingType = 'linear') => {
   if (!beforeKf || !afterKf) return null;
@@ -55,11 +52,15 @@ export const interpolateProperties = (beforeKf, afterKf, time, easingType = 'lin
   const rawT = (time - beforeKf.time) / (afterKf.time - beforeKf.time);
   const t = applyEasing(rawT, easingType);
 
-  // Normalize rotation to take shortest path
   const normalizedRotation = normalizeAngle(
     beforeKf.properties.rotation, 
     afterKf.properties.rotation
   );
+
+  // zIndex uses step interpolation (snaps at midpoint)
+  const beforeZ = beforeKf.properties.zIndex ?? 0;
+  const afterZ = afterKf.properties.zIndex ?? 0;
+  const interpolatedZ = rawT < 0.5 ? beforeZ : afterZ;
 
   return {
     x: lerp(beforeKf.properties.x, afterKf.properties.x, t),
@@ -68,12 +69,14 @@ export const interpolateProperties = (beforeKf, afterKf, time, easingType = 'lin
     scaleY: lerp(beforeKf.properties.scaleY, afterKf.properties.scaleY, t),
     rotation: lerp(beforeKf.properties.rotation, normalizedRotation, t),
     opacity: lerp(beforeKf.properties.opacity, afterKf.properties.opacity, t),
+    zIndex: interpolatedZ,
   };
 };
 
 /**
  * Apply interpolated properties to a Fabric.js object.
  * Sets left/top directly (origin point position).
+ * Applies zIndex by reordering on canvas.
  */
 export const applyPropertiesToFabricObject = (fabricObject, properties) => {
   if (!fabricObject || !properties) return;
@@ -85,6 +88,39 @@ export const applyPropertiesToFabricObject = (fabricObject, properties) => {
     scaleY: properties.scaleY,
     angle: properties.rotation,
     opacity: properties.opacity,
+  });
+
+  // Store target zIndex for batch reordering
+  if (properties.zIndex !== undefined) {
+    fabricObject._targetZIndex = properties.zIndex;
+  }
+};
+
+/**
+ * Reorder canvas objects based on their _targetZIndex values.
+ * Call this once per frame after applying all interpolated properties.
+ */
+export const applyZIndexOrdering = (fabricCanvas) => {
+  if (!fabricCanvas) return;
+  
+  const objects = fabricCanvas.getObjects();
+  const objectsWithZIndex = objects.filter(obj => obj._targetZIndex !== undefined);
+  
+  if (objectsWithZIndex.length === 0) return;
+  
+  // Sort by target zIndex
+  objectsWithZIndex.sort((a, b) => (a._targetZIndex || 0) - (b._targetZIndex || 0));
+  
+  // Apply ordering using Fabric v6 API
+  objectsWithZIndex.forEach((obj) => {
+    try {
+      // Move to front in order (lowest zIndex first, highest last = on top)
+      if (typeof fabricCanvas.bringObjectToFront === 'function') {
+        fabricCanvas.bringObjectToFront(obj);
+      }
+    } catch (e) {
+      // Silently ignore if method not available
+    }
   });
 };
 
@@ -110,9 +146,6 @@ export const snapToNearestKeyframe = (time, keyframes, threshold = 0.1) => {
 
 /**
  * Pre-process keyframes to normalize rotation values for animation.
- * Each rotation is adjusted relative to the previous keyframe to take
- * the shortest angular path. Returns a new array (does not mutate input).
- * 
  * Used by LivePreview and codeGenerator before building GSAP timelines.
  */
 export const normalizeKeyframeRotations = (keyframes) => {
