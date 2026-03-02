@@ -154,18 +154,13 @@ document.addEventListener('DOMContentLoaded', () => {
 // ========== PATH CREATION (with embedded fills) ==========
 const generatePathCreation = (obj, firstKf, fabricCanvas) => {
   const pathString = fabricPathToSVGPath(obj.pathData);
-  const anchorX = obj.anchorX ?? 0.5, anchorY = obj.anchorY ?? 0.5;
-  let ow = 0, oh = 0;
-  if (fabricCanvas) {
-    const fo = fabricCanvas.getObjects().find(o => o.id === obj.id);
-    if (fo) { ow = fo.width || 0; oh = fo.height || 0; }
-  }
   // SVG offset = negative of wrapper initial position so absolute path coords map to canvas correctly
   const svgOffsetX = firstKf.properties.x;
   const svgOffsetY = firstKf.properties.y;
-  // Anchor offset from center for transform-origin (0,0 for default anchor)
-  const anchorOffsetX = (anchorX - 0.5) * ow;
-  const anchorOffsetY = (anchorY - 0.5) * oh;
+  // transformOrigin MUST be 0,0 — the wrapper div is positioned at the Fabric origin point
+  // (which is the anchor/pivot point). Rotation should pivot exactly at that point.
+  // The old formula (anchorX-0.5)*width was WRONG: it double-counted the anchor offset
+  // because the wrapper position already IS the anchor position.
   const zIndex = firstKf.properties.zIndex ?? 0;
   const wrapperId = obj.id;
   let js = `    // Create ${obj.name} (SVG Path with wrapper)
@@ -177,7 +172,7 @@ const generatePathCreation = (obj, firstKf, fabricCanvas) => {
     ${wrapperId}.style.width = '0px';
     ${wrapperId}.style.height = '0px';
     ${wrapperId}.style.overflow = 'visible';
-    ${wrapperId}.style.transformOrigin = '${anchorOffsetX.toFixed(2)}px ${anchorOffsetY.toFixed(2)}px';
+    ${wrapperId}.style.transformOrigin = '0px 0px';
     ${wrapperId}.style.zIndex = '${zIndex}';
 `;
 
@@ -233,15 +228,8 @@ const generatePathCreation = (obj, firstKf, fabricCanvas) => {
 
 // ========== GROUP CREATION ==========
 const generateGroupCreation = (obj, firstKf, canvasObjects, fabricCanvas) => {
-  const anchorX = obj.anchorX ?? 0.5, anchorY = obj.anchorY ?? 0.5;
-  let pivotOffsetX = 0, pivotOffsetY = 0;
-  if (fabricCanvas) {
-    const fg = fabricCanvas.getObjects().find(o => o.id === obj.id);
-    if (fg) {
-      pivotOffsetX = (anchorX - 0.5) * (fg.width || 0) * (fg.scaleX || 1);
-      pivotOffsetY = (anchorY - 0.5) * (fg.height || 0) * (fg.scaleY || 1);
-    }
-  }
+  // transformOrigin = 0,0 because wrapper is positioned at the Fabric origin point (anchor).
+  // Rotation pivots around that point naturally. No additional offset needed.
   const zIndex = firstKf.properties.zIndex ?? 0;
   let js = `    // Create ${obj.name} (Group)
     const ${obj.id} = document.createElement('div');
@@ -252,7 +240,7 @@ const generateGroupCreation = (obj, firstKf, canvasObjects, fabricCanvas) => {
     ${obj.id}.style.width = '0px';
     ${obj.id}.style.height = '0px';
     ${obj.id}.style.overflow = 'visible';
-    ${obj.id}.style.transformOrigin = '${pivotOffsetX.toFixed(2)}px ${pivotOffsetY.toFixed(2)}px';
+    ${obj.id}.style.transformOrigin = '0px 0px';
     ${obj.id}.style.zIndex = '${zIndex}';
     container.appendChild(${obj.id});
     gsap.set(${obj.id}, {

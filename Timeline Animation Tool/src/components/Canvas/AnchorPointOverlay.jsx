@@ -4,14 +4,16 @@
  * Displays and allows dragging of the anchor point (rotation pivot)
  * for the currently selected object on the Fabric.js canvas.
  * 
- * Uses BRIGHT GREEN color scheme (#00E676) to clearly distinguish from 
- * the blue Fabric.js selection handles and bounding box.
- * Also renders a green dashed bounding box so the user knows anchor edit
- * mode is active and can see the anchor region clearly.
+ * TWO VISUAL MODES:
+ * 1. ANCHOR EDIT MODE (active): Full green dashed bounding box, green corner markers,
+ *    draggable crosshair, info label — clearly distinct from blue Fabric.js selection.
+ * 2. PASSIVE MODE (not editing, but object has custom anchor): Small persistent green
+ *    dot at the anchor position so the user always knows where the pivot is.
+ *    This prevents confusion with Fabric.js blue resize handles.
  */
 
-import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { Box, Typography } from '@mui/material';
+import React, { useEffect, useState, useCallback } from 'react';
+import { Box } from '@mui/material';
 
 import { 
   useSelectedObject, 
@@ -43,9 +45,19 @@ const AnchorPointOverlay = () => {
     };
   }, [canvasObjects, selectedObject]);
 
-  // Update anchor position overlay when selection changes or object moves
+  // Check if anchor is non-center (custom)
+  const hasCustomAnchor = useCallback(() => {
+    const { anchorX, anchorY } = getAnchorValues();
+    return Math.abs(anchorX - 0.5) > 0.01 || Math.abs(anchorY - 0.5) > 0.01;
+  }, [getAnchorValues]);
+
+  // Track anchor position for BOTH modes:
+  // - Anchor edit mode: always track (for full overlay)
+  // - Normal mode: track only if custom anchor exists (for persistent dot)
   useEffect(() => {
-    if (!fabricCanvas || !selectedObject || !anchorEditMode) {
+    const shouldTrack = fabricCanvas && selectedObject && (anchorEditMode || hasCustomAnchor());
+    
+    if (!shouldTrack) {
       setAnchorPosition(null);
       return;
     }
@@ -86,7 +98,7 @@ const AnchorPointOverlay = () => {
       fabricCanvas.off('object:rotating', updateAnchorPosition);
       fabricCanvas.off('after:render', updateAnchorPosition);
     };
-  }, [fabricCanvas, selectedObject, anchorEditMode, canvasObjects, getAnchorValues]);
+  }, [fabricCanvas, selectedObject, anchorEditMode, canvasObjects, getAnchorValues, hasCustomAnchor]);
 
   const handleMouseDown = (e) => {
     e.stopPropagation();
@@ -157,13 +169,87 @@ const AnchorPointOverlay = () => {
     ));
   };
 
-  if (!anchorPosition || !anchorEditMode) return null;
+  // Nothing to show
+  if (!anchorPosition) return null;
 
   const { anchorX, anchorY } = getAnchorValues();
+  const isCustom = hasCustomAnchor();
 
+  // ============================================================
+  // MODE 1: PASSIVE — small persistent green dot (not in edit mode)
+  // Shows when object has a custom anchor, so user always sees
+  // where the pivot is and doesn't confuse it with blue resize handles.
+  // ============================================================
+  if (!anchorEditMode) {
+    if (!isCustom) return null; // Default center anchor — no indicator needed
+    
+    return (
+      <>
+        {/* Small green crosshair dot at anchor position — always visible when selected */}
+        <Box
+          sx={{
+            position: 'absolute',
+            left: anchorPosition.x,
+            top: anchorPosition.y,
+            width: 18,
+            height: 18,
+            transform: 'translate(-50%, -50%)',
+            pointerEvents: 'none',
+            zIndex: 999,
+          }}
+        >
+          <svg width="18" height="18" viewBox="0 0 18 18">
+            {/* Black outline ring for contrast on any background */}
+            <circle cx="9" cy="9" r="6" fill="none" stroke="#000000" strokeWidth="2.5" />
+            {/* Green ring */}
+            <circle cx="9" cy="9" r="6" fill="none" stroke={ANCHOR_COLOR} strokeWidth="1.5" />
+            {/* Green center dot */}
+            <circle cx="9" cy="9" r="2.5" fill={ANCHOR_COLOR} stroke="#000" strokeWidth="0.8" />
+            {/* Small crosshair lines — black outline then green */}
+            <line x1="9" y1="1" x2="9" y2="5" stroke="#000" strokeWidth="1.5" />
+            <line x1="9" y1="13" x2="9" y2="17" stroke="#000" strokeWidth="1.5" />
+            <line x1="1" y1="9" x2="5" y2="9" stroke="#000" strokeWidth="1.5" />
+            <line x1="13" y1="9" x2="17" y2="9" stroke="#000" strokeWidth="1.5" />
+            <line x1="9" y1="1" x2="9" y2="5" stroke={ANCHOR_COLOR} strokeWidth="0.8" />
+            <line x1="9" y1="13" x2="9" y2="17" stroke={ANCHOR_COLOR} strokeWidth="0.8" />
+            <line x1="1" y1="9" x2="5" y2="9" stroke={ANCHOR_COLOR} strokeWidth="0.8" />
+            <line x1="13" y1="9" x2="17" y2="9" stroke={ANCHOR_COLOR} strokeWidth="0.8" />
+          </svg>
+        </Box>
+        {/* Compact label */}
+        <Box
+          sx={{
+            position: 'absolute',
+            left: anchorPosition.x + 12,
+            top: anchorPosition.y - 20,
+            bgcolor: ANCHOR_COLOR_BG,
+            color: '#000',
+            px: 0.5,
+            py: 0.15,
+            borderRadius: 0.5,
+            fontSize: '9px',
+            fontWeight: 700,
+            pointerEvents: 'none',
+            zIndex: 999,
+            whiteSpace: 'nowrap',
+            border: '1px solid rgba(0,0,0,0.3)',
+          }}
+        >
+          ⊕ {(anchorX * 100).toFixed(0)}%,{(anchorY * 100).toFixed(0)}%
+        </Box>
+      </>
+    );
+  }
+
+  // ============================================================
+  // MODE 2: ACTIVE EDIT — full green dashed box, corners, crosshair
+  // Clearly distinct from Fabric.js blue selection handles:
+  //   Blue solid box + blue square handles = Fabric.js resize/rotate
+  //   Green dashed box + green corners + green crosshair = Anchor edit
+  // ============================================================
   return (
     <>
-      {/* Green dashed bounding box — clearly distinct from blue Fabric.js selection */}
+      {/* Green dashed bounding box */}
       <Box
         sx={{
           position: 'absolute',
@@ -179,7 +265,7 @@ const AnchorPointOverlay = () => {
         }}
       />
 
-      {/* Corner markers on the green bounding box */}
+      {/* Green corner markers on the bounding box */}
       {[[0, 0], [1, 0], [0, 1], [1, 1]].map(([cx, cy], i) => (
         <Box
           key={i}
@@ -198,7 +284,7 @@ const AnchorPointOverlay = () => {
         />
       ))}
 
-      {/* Anchor point crosshair — GREEN with black outline for max visibility */}
+      {/* Draggable anchor crosshair — GREEN with black outline */}
       <Box
         sx={{
           position: 'absolute',
@@ -215,13 +301,9 @@ const AnchorPointOverlay = () => {
         onDoubleClick={handleDoubleClick}
       >
         <svg width="26" height="26" viewBox="0 0 26 26">
-          {/* Black outline for contrast */}
           <circle cx="13" cy="13" r="9" fill="none" stroke="#000000" strokeWidth="3.5" />
-          {/* Green circle */}
           <circle cx="13" cy="13" r="9" fill="none" stroke={ANCHOR_COLOR} strokeWidth="2" />
-          {/* Inner dot */}
           <circle cx="13" cy="13" r="3" fill={ANCHOR_COLOR} stroke="#000" strokeWidth="1" />
-          {/* Crosshair lines — black outline then green */}
           <line x1="13" y1="0" x2="13" y2="26" stroke="#000000" strokeWidth="3" />
           <line x1="0" y1="13" x2="26" y2="13" stroke="#000000" strokeWidth="3" />
           <line x1="13" y1="0" x2="13" y2="26" stroke={ANCHOR_COLOR} strokeWidth="1.5" />
@@ -229,7 +311,7 @@ const AnchorPointOverlay = () => {
         </svg>
       </Box>
       
-      {/* Anchor info label — green background with dark text */}
+      {/* Anchor info label */}
       <Box
         sx={{
           position: 'absolute',

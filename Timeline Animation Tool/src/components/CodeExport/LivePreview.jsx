@@ -63,7 +63,6 @@ const LivePreview = () => {
     const fabricGroup = fabricCanvas?.getObjects().find(o => o.id === obj.id);
     if (!fabricGroup) return;
     const firstKf = objKfs[0];
-    const anchorX = obj.anchorX ?? 0.5, anchorY = obj.anchorY ?? 0.5;
     const groupEl = document.createElement('div');
     groupEl.id = obj.id;
     groupEl.style.position = 'absolute';
@@ -72,9 +71,8 @@ const LivePreview = () => {
     groupEl.style.width = '0px'; groupEl.style.height = '0px';
     groupEl.style.overflow = 'visible';
     groupEl.style.zIndex = (firstKf.properties.zIndex ?? 0).toString();
-    const gw = (fabricGroup.width || 0) * (fabricGroup.scaleX || 1);
-    const gh = (fabricGroup.height || 0) * (fabricGroup.scaleY || 1);
-    groupEl.style.transformOrigin = `${(anchorX - 0.5) * gw}px ${(anchorY - 0.5) * gh}px`;
+    // transformOrigin = 0,0 because wrapper is at the Fabric origin point (anchor).
+    groupEl.style.transformOrigin = '0px 0px';
     container.appendChild(groupEl);
     gsap.set(groupEl, { scaleX: firstKf.properties.scaleX, scaleY: firstKf.properties.scaleY,
       rotation: firstKf.properties.rotation, opacity: firstKf.properties.opacity });
@@ -143,21 +141,17 @@ const LivePreview = () => {
     const timeline = timelineRef.current;
     if (objKfs.length === 0) return;
     const fo = fabricCanvas?.getObjects().find(o => o.id === obj.id);
-    const anchorX = obj.anchorX ?? 0.5, anchorY = obj.anchorY ?? 0.5;
     const firstKf = objKfs[0];
-    let ow = 0, oh = 0;
-    if (fo) { ow = fo.width || 0; oh = fo.height || 0; }
     // SVG offset = negative of wrapper initial position (absolute path coords map to canvas)
     const svgOffsetX = firstKf.properties.x;
     const svgOffsetY = firstKf.properties.y;
-    // Anchor offset from center for transform-origin
-    const anchorOffsetX = (anchorX - 0.5) * ow;
-    const anchorOffsetY = (anchorY - 0.5) * oh;
     const wrapper = document.createElement('div');
     wrapper.id = obj.id; wrapper.style.position = 'absolute';
     wrapper.style.left = firstKf.properties.x + 'px'; wrapper.style.top = firstKf.properties.y + 'px';
     wrapper.style.width = '0px'; wrapper.style.height = '0px'; wrapper.style.overflow = 'visible';
-    wrapper.style.transformOrigin = anchorOffsetX + 'px ' + anchorOffsetY + 'px';
+    // transformOrigin = 0,0 because wrapper is at the Fabric origin point (anchor).
+    // The old formula (anchorX-0.5)*width was WRONG — it double-counted the offset.
+    wrapper.style.transformOrigin = '0px 0px';
     wrapper.style.zIndex = (firstKf.properties.zIndex ?? 0).toString();
 
     // Render embedded fill images FIRST (behind strokes)
