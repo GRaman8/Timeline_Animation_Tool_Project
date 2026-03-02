@@ -9,12 +9,14 @@ export const canvasObjectsState = atom({
   //   type, // 'rectangle', 'circle', 'text', 'path', 'group'
   //   name, 
   //   children: [], // Only for groups - array of child object IDs
-  //   anchorX: 0.5, // 0-1, where 0.5 is center (NEW)
-  //   anchorY: 0.5  // 0-1, where 0.5 is center (NEW)
+  //   anchorX: 0.5, // 0-1, where 0.5 is center
+  //   anchorY: 0.5, // 0-1, where 0.5 is center
+  //   fill: '#color', // Fill color for shapes and paths
+  //   fillColor: '', // Fill color for closed path strokes
   // }]
 });
 
-// Keyframes state - NOW INCLUDES ANCHOR POINT
+// Keyframes state
 export const keyframesState = atom({
   key: 'keyframesState',
   default: {},
@@ -56,7 +58,7 @@ export const fabricCanvasState = atom({
   dangerouslyAllowMutability: true,
 });
 
-// Property values for selected object - NOW INCLUDES ANCHOR
+// Property values for selected object
 export const selectedObjectPropertiesState = atom({
   key: 'selectedObjectPropertiesState',
   default: {
@@ -66,8 +68,8 @@ export const selectedObjectPropertiesState = atom({
     scaleY: 1,
     rotation: 0,
     opacity: 1,
-    anchorX: 0.5, // NEW
-    anchorY: 0.5, // NEW
+    anchorX: 0.5,
+    anchorY: 0.5,
   },
 });
 
@@ -89,10 +91,11 @@ export const timelineZoomState = atom({
   default: 1,
 });
 
-// Selected keyframe for editing
+// Selected keyframe for editing — stores {objectId, index} or null
 export const selectedKeyframeState = atom({
   key: 'selectedKeyframeState',
   default: null,
+  // Structure: { objectId: string, index: number } | null
 });
 
 // Snap to keyframes setting
@@ -130,8 +133,44 @@ export const drawingToolSettingsState = atom({
   },
 });
 
-// Anchor point editing mode (NEW)
+// Anchor point editing mode
 export const anchorEditModeState = atom({
   key: 'anchorEditModeState',
   default: false,
+});
+
+// ===== NEW ATOMS =====
+
+// Locked/disabled tracks — plain object { [objectId]: true }
+// IMPORTANT: Must be a plain serializable object, NOT a Set.
+// Recoil's change detection relies on immutable value comparison.
+// Set mutations bypass this and cause silent reactivity failures.
+export const lockedTracksState = atom({
+  key: 'lockedTracksState',
+  default: {},
+});
+
+// Explicit track order — array of object IDs defining display order
+// First = front (highest z-index), last = back (lowest z-index)
+export const trackOrderState = atom({
+  key: 'trackOrderState',
+  default: [],
+});
+
+// Canvas background color
+export const canvasBgColorState = atom({
+  key: 'canvasBgColorState',
+  default: '#f0f0f0',
+});
+
+// Paint bucket tool active
+export const fillToolActiveState = atom({
+  key: 'fillToolActiveState',
+  default: false,
+});
+
+// Paint bucket fill color
+export const fillToolColorState = atom({
+  key: 'fillToolColorState',
+  default: '#ff0000',
 });

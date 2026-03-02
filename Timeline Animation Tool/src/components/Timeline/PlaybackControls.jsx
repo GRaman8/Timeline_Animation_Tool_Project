@@ -7,7 +7,9 @@ import {
   Checkbox,
   FormControlLabel,
   TextField,
-  Tooltip
+  Tooltip,
+  Snackbar,
+  Alert,
 } from '@mui/material';
 import { 
   PlayArrow, 
@@ -25,7 +27,9 @@ import {
   useFabricCanvas,
   useKeyframes,
   useLoopPlayback,
-  useCanvasObjects
+  useCanvasObjects,
+  useLockedTracks,
+  useSelectedKeyframe,
 } from '../../store/hooks';
 import { extractPropertiesFromFabricObject, findFabricObjectById } from '../../utils/fabricHelpers';
 
@@ -38,16 +42,14 @@ const PlaybackControls = () => {
   const [keyframes, setKeyframes] = useKeyframes();
   const [loopPlayback, setLoopPlayback] = useLoopPlayback();
   const [canvasObjects] = useCanvasObjects();
+  const [lockedTracks] = useLockedTracks();
+  const [, setSelectedKeyframe] = useSelectedKeyframe();
 
   const animationFrameRef = useRef(null);
   const playbackStartTimeRef = useRef(null);
+  const [snackMessage, setSnackMessage] = React.useState('');
   
-  /**
-   * FIX: Use refs for values accessed inside requestAnimationFrame loop.
-   * The animate() function runs asynchronously via rAF, so it captures
-   * closure values from when handlePlay was called. Using refs ensures
-   * the animate function always reads the CURRENT values.
-   */
+  // FIX: Refs for values read inside rAF loop (avoids stale closure)
   const loopPlaybackRef = useRef(loopPlayback);
   const durationRef = useRef(duration);
   
@@ -61,6 +63,7 @@ const PlaybackControls = () => {
 
   const handlePlay = useCallback(() => {
     setIsPlaying(true);
+    setSelectedKeyframe(null); // Clear keyframe selection during play
     playbackStartTimeRef.current = Date.now() - (currentTime * 1000);
 
     const animate = () => {
@@ -69,7 +72,6 @@ const PlaybackControls = () => {
 
       if (elapsed >= dur) {
         if (loopPlaybackRef.current) {
-          // Loop back to start
           setCurrentTime(0);
           playbackStartTimeRef.current = Date.now();
           animationFrameRef.current = requestAnimationFrame(animate);
@@ -85,7 +87,7 @@ const PlaybackControls = () => {
     };
 
     animationFrameRef.current = requestAnimationFrame(animate);
-  }, [currentTime, setCurrentTime, setIsPlaying]);
+  }, [currentTime, setCurrentTime, setIsPlaying, setSelectedKeyframe]);
 
   const handlePause = useCallback(() => {
     setIsPlaying(false);
@@ -100,9 +102,9 @@ const PlaybackControls = () => {
       cancelAnimationFrame(animationFrameRef.current);
     }
     setCurrentTime(0);
-  }, [setCurrentTime, setIsPlaying]);
+    setSelectedKeyframe(null);
+  }, [setCurrentTime, setIsPlaying, setSelectedKeyframe]);
 
-  // Step to previous keyframe
   const handleStepPrevious = () => {
     const allKeyframeTimes = [];
     Object.values(keyframes).forEach(objKeyframes => {
@@ -113,8 +115,7 @@ const PlaybackControls = () => {
       });
     });
     allKeyframeTimes.sort((a, b) => a - b);
-
-    const previousTimes = allKeyframeTimes.filter(t => t < currentTime);
+    const previousTimes = allKeyframeTimes.filter(t => t < currentTime - 0.01);
     if (previousTimes.length > 0) {
       setCurrentTime(previousTimes[previousTimes.length - 1]);
     } else {
@@ -122,7 +123,6 @@ const PlaybackControls = () => {
     }
   };
 
-  // Step to next keyframe
   const handleStepNext = () => {
     const allKeyframeTimes = [];
     Object.values(keyframes).forEach(objKeyframes => {
@@ -133,8 +133,7 @@ const PlaybackControls = () => {
       });
     });
     allKeyframeTimes.sort((a, b) => a - b);
-
-    const nextTimes = allKeyframeTimes.filter(t => t > currentTime);
+    const nextTimes = allKeyframeTimes.filter(t => t > currentTime + 0.01);
     if (nextTimes.length > 0) {
       setCurrentTime(nextTimes[0]);
     }
@@ -142,6 +141,12 @@ const PlaybackControls = () => {
 
   const handleAddKeyframe = () => {
     if (!selectedObject || !fabricCanvas) return;
+
+    // FIX: Use plain object lookup, not Set.has()
+    if (lockedTracks[selectedObject]) {
+      setSnackMessage('This track is locked. Unlock it to add keyframes.');
+      return;
+    }
 
     const fabricObject = findFabricObjectById(fabricCanvas, selectedObject);
     if (!fabricObject) return;
@@ -175,7 +180,6 @@ const PlaybackControls = () => {
     });
   };
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (animationFrameRef.current) {
@@ -184,9 +188,12 @@ const PlaybackControls = () => {
     };
   }, []);
 
+  // FIX: Use plain object lookup
+  const isObjectLocked = selectedObject && !!lockedTracks[selectedObject];
+
   return (
     <Box>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, flexWrap: 'wrap' }}>
         <Tooltip title="Previous Keyframe">
           <IconButton onClick={handleStepPrevious} size="small">
             <SkipPrevious />
@@ -218,7 +225,7 @@ const PlaybackControls = () => {
           </IconButton>
         </Tooltip>
         
-        <Typography variant="body2" sx={{ ml: 2, minWidth: 120 }}>
+        <Typography variant="body2" sx={{ ml: 1, minWidth: 110, fontSize: '0.8rem' }}>
           {currentTime.toFixed(2)}s / {duration.toFixed(1)}s
         </Typography>
 
@@ -230,10 +237,11 @@ const PlaybackControls = () => {
                 onChange={(e) => setLoopPlayback(e.target.checked)}
                 icon={<Replay />}
                 checkedIcon={<Replay color="primary" />}
+                size="small"
               />
             }
             label="Loop"
-            sx={{ ml: 2 }}
+            sx={{ ml: 1 }}
           />
         </Tooltip>
 
@@ -247,15 +255,31 @@ const PlaybackControls = () => {
           inputProps={{ step: 0.5, min: 1 }}
         />
         
-        <Button 
-          variant="contained" 
-          size="small" 
-          onClick={handleAddKeyframe}
-          disabled={!selectedObject}
-        >
-          Add Keyframe
-        </Button>
+        <Tooltip title={isObjectLocked ? "Track is locked — unlock to add keyframes" : "Add keyframe at current time"}>
+          <span>
+            <Button 
+              variant="contained" 
+              size="small" 
+              onClick={handleAddKeyframe}
+              disabled={!selectedObject || isObjectLocked}
+              color={isObjectLocked ? "inherit" : "primary"}
+            >
+              Add Keyframe
+            </Button>
+          </span>
+        </Tooltip>
       </Box>
+
+      <Snackbar
+        open={!!snackMessage}
+        autoHideDuration={3000}
+        onClose={() => setSnackMessage('')}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert severity="warning" onClose={() => setSnackMessage('')}>
+          {snackMessage}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 };

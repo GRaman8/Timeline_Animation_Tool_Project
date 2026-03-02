@@ -18,7 +18,12 @@ import {
   drawingModeState,
   currentDrawingPathState,
   drawingToolSettingsState,
-  anchorEditModeState, // NEW
+  anchorEditModeState,
+  lockedTracksState,
+  trackOrderState,
+  canvasBgColorState,
+  fillToolActiveState,
+  fillToolColorState,
 } from './atoms';
 
 import {
@@ -104,7 +109,28 @@ export const useDrawingToolSettings = () => {
   return useRecoilState(drawingToolSettingsState);
 };
 
-// NEW - Anchor edit mode hook
 export const useAnchorEditMode = () => {
   return useRecoilState(anchorEditModeState);
 };
+
+// ===== NEW HOOKS =====
+
+export const useLockedTracks = () => {
+  return useRecoilState(lockedTracksState);
+};
+
+export const useTrackOrder = () => {
+  return useRecoilState(trackOrderState);
+};
+
+export const useCanvasBgColor = () => {
+  return useRecoilState(canvasBgColorState);
+};
+
+export const useFillToolActive = () => {
+  return useRecoilState(fillToolActiveState);
+}
+
+export const useFillToolColor = () => {
+  return useRecoilState(fillToolColorState);
+} 

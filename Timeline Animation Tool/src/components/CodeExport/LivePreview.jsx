@@ -1,21 +1,15 @@
 import React, { useEffect, useRef } from 'react';
 import { Box, Paper, Typography } from '@mui/material';
 import gsap from 'gsap';
-import { useCanvasObjects, useKeyframes, useDuration, useFabricCanvas } from '../../store/hooks';
+import { useCanvasObjects, useKeyframes, useDuration, useFabricCanvas, useCanvasBgColor } from '../../store/hooks';
 import { normalizeKeyframeRotations } from '../../utils/interpolation';
 import { CANVAS_WIDTH, CANVAS_HEIGHT } from '../Canvas/Canvas';
 
-/**
- * Convert Fabric.js path array to SVG path string
- */
 const fabricPathToSVGPath = (pathArray) => {
   if (!pathArray || !Array.isArray(pathArray)) return '';
-  let pathString = '';
-  pathArray.forEach(segment => {
-    if (!Array.isArray(segment)) return;
-    pathString += segment[0] + ' ' + segment.slice(1).join(' ') + ' ';
-  });
-  return pathString.trim();
+  let s = '';
+  pathArray.forEach(seg => { if (Array.isArray(seg)) s += seg[0] + ' ' + seg.slice(1).join(' ') + ' '; });
+  return s.trim();
 };
 
 const getDefaultFillColor = (type) => {
@@ -32,389 +26,228 @@ const LivePreview = () => {
   const [keyframes] = useKeyframes();
   const [duration] = useDuration();
   const [fabricCanvas] = useFabricCanvas();
+  const [canvasBgColor] = useCanvasBgColor();
   const containerRef = useRef(null);
   const timelineRef = useRef(null);
 
   useEffect(() => {
     if (!containerRef.current) return;
     containerRef.current.innerHTML = '';
-
-    if (timelineRef.current) {
-      timelineRef.current.kill();
-    }
-    
+    if (timelineRef.current) timelineRef.current.kill();
     timelineRef.current = gsap.timeline({ repeat: -1 });
 
     const groupChildren = new Set();
     canvasObjects.forEach(obj => {
-      if (obj.type === 'group' && obj.children) {
-        obj.children.forEach(childId => groupChildren.add(childId));
-      }
+      if (obj.type === 'group' && obj.children) obj.children.forEach(childId => groupChildren.add(childId));
     });
 
     canvasObjects.forEach(obj => {
-      const rawKeyframes = keyframes[obj.id] || [];
-      if (rawKeyframes.length === 0) return;
+      const rawKfs = keyframes[obj.id] || [];
+      if (rawKfs.length === 0) return;
       if (groupChildren.has(obj.id)) return;
 
-      const objKeyframes = normalizeKeyframeRotations(rawKeyframes);
+      const objKfs = normalizeKeyframeRotations(rawKfs);
 
-      if (obj.type === 'group') {
-        renderGroup(obj, objKeyframes);
-      } else if (obj.type === 'path') {
-        renderPath(obj, objKeyframes);
-      } else {
-        renderRegular(obj, objKeyframes);
-      }
+      if (obj.type === 'group') renderGroup(obj, objKfs);
+      else if (obj.type === 'path') renderPath(obj, objKfs);
+      else renderRegular(obj, objKfs);
     });
 
-    return () => {
-      if (timelineRef.current) timelineRef.current.kill();
-    };
-  }, [canvasObjects, keyframes, duration, fabricCanvas]);
+    return () => { if (timelineRef.current) timelineRef.current.kill(); };
+  }, [canvasObjects, keyframes, duration, fabricCanvas, canvasBgColor]);
 
-  /**
-   * Render a group.
-   */
-  const renderGroup = (obj, objKeyframes) => {
+  // ===== GROUP =====
+  const renderGroup = (obj, objKfs) => {
     const container = containerRef.current;
     const timeline = timelineRef.current;
     const fabricGroup = fabricCanvas?.getObjects().find(o => o.id === obj.id);
     if (!fabricGroup) return;
-    
-    const firstKf = objKeyframes[0];
-    const anchorX = obj.anchorX ?? 0.5;
-    const anchorY = obj.anchorY ?? 0.5;
-
+    const firstKf = objKfs[0];
+    const anchorX = obj.anchorX ?? 0.5, anchorY = obj.anchorY ?? 0.5;
     const groupEl = document.createElement('div');
     groupEl.id = obj.id;
     groupEl.style.position = 'absolute';
     groupEl.style.left = firstKf.properties.x + 'px';
     groupEl.style.top = firstKf.properties.y + 'px';
-    groupEl.style.width = '0px';
-    groupEl.style.height = '0px';
+    groupEl.style.width = '0px'; groupEl.style.height = '0px';
     groupEl.style.overflow = 'visible';
     groupEl.style.zIndex = (firstKf.properties.zIndex ?? 0).toString();
-    
-    const groupWidth = (fabricGroup.width || 0) * (fabricGroup.scaleX || 1);
-    const groupHeight = (fabricGroup.height || 0) * (fabricGroup.scaleY || 1);
-    const pivotOffsetX = (anchorX - 0.5) * groupWidth;
-    const pivotOffsetY = (anchorY - 0.5) * groupHeight;
-    groupEl.style.transformOrigin = `${pivotOffsetX}px ${pivotOffsetY}px`;
-    
+    const gw = (fabricGroup.width || 0) * (fabricGroup.scaleX || 1);
+    const gh = (fabricGroup.height || 0) * (fabricGroup.scaleY || 1);
+    groupEl.style.transformOrigin = `${(anchorX - 0.5) * gw}px ${(anchorY - 0.5) * gh}px`;
     container.appendChild(groupEl);
-
-    gsap.set(groupEl, {
-      scaleX: firstKf.properties.scaleX,
-      scaleY: firstKf.properties.scaleY,
-      rotation: firstKf.properties.rotation,
-      opacity: firstKf.properties.opacity,
-    });
-
+    gsap.set(groupEl, { scaleX: firstKf.properties.scaleX, scaleY: firstKf.properties.scaleY,
+      rotation: firstKf.properties.rotation, opacity: firstKf.properties.opacity });
     if (fabricGroup._objects) {
-      fabricGroup._objects.forEach((fabricChild) => {
-        const childObj = canvasObjects.find(o => o.id === fabricChild.id);
+      fabricGroup._objects.forEach((fc) => {
+        const childObj = canvasObjects.find(o => o.id === fc.id);
         if (!childObj) return;
-        
-        const relLeft = fabricChild.left || 0;
-        const relTop = fabricChild.top || 0;
-        const childScaleX = fabricChild.scaleX || 1;
-        const childScaleY = fabricChild.scaleY || 1;
-        const childAngle = fabricChild.angle || 0;
-
-        if (fabricChild.type === 'path') {
-          renderPathChild(fabricChild, relLeft, relTop, childScaleX, childScaleY, groupEl);
-        } else {
-          renderSolidChild(fabricChild, childObj, relLeft, relTop, childScaleX, childScaleY, childAngle, groupEl);
-        }
+        if (fc.type === 'path') renderPathChild(fc, fc.left || 0, fc.top || 0, fc.scaleX || 1, fc.scaleY || 1, groupEl);
+        else renderSolidChild(fc, childObj, fc.left || 0, fc.top || 0, fc.scaleX || 1, fc.scaleY || 1, fc.angle || 0, groupEl);
       });
     }
-
-    for (let i = 1; i < objKeyframes.length; i++) {
-      const prevKf = objKeyframes[i - 1];
-      const currKf = objKeyframes[i];
+    for (let i = 1; i < objKfs.length; i++) {
+      const prev = objKfs[i - 1], curr = objKfs[i];
       timeline.to(groupEl, {
-        duration: currKf.time - prevKf.time,
-        left: currKf.properties.x + 'px',
-        top: currKf.properties.y + 'px',
-        scaleX: currKf.properties.scaleX,
-        scaleY: currKf.properties.scaleY,
-        rotation: currKf.properties.rotation,
-        opacity: currKf.properties.opacity,
-        zIndex: currKf.properties.zIndex ?? 0,
-        ease: currKf.easing || 'none',
-      }, prevKf.time);
+        duration: curr.time - prev.time, left: curr.properties.x + 'px', top: curr.properties.y + 'px',
+        scaleX: curr.properties.scaleX, scaleY: curr.properties.scaleY,
+        rotation: curr.properties.rotation, opacity: curr.properties.opacity,
+        zIndex: curr.properties.zIndex ?? 0, ease: curr.easing || 'none',
+      }, prev.time);
     }
   };
 
-  /**
-   * Render a path child inside a group.
-   */
-  const renderPathChild = (fabricChild, relLeft, relTop, scaleX, scaleY, parentEl) => {
-    const pathString = fabricPathToSVGPath(fabricChild.path);
+  const renderPathChild = (fc, relLeft, relTop, scaleX, scaleY, parentEl) => {
+    const pathString = fabricPathToSVGPath(fc.path);
     if (!pathString) return;
-    
-    const pathOffsetX = fabricChild.pathOffset?.x || 0;
-    const pathOffsetY = fabricChild.pathOffset?.y || 0;
-    
-    const tx = relLeft - pathOffsetX * scaleX;
-    const ty = relTop - pathOffsetY * scaleY;
-    
+    const poX = fc.pathOffset?.x || 0, poY = fc.pathOffset?.y || 0;
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    svg.style.position = 'absolute';
-    svg.style.left = '0';
-    svg.style.top = '0';
-    svg.style.overflow = 'visible';
-    svg.style.pointerEvents = 'none';
-    svg.setAttribute('width', '1');
-    svg.setAttribute('height', '1');
-    
+    svg.style.position = 'absolute'; svg.style.left = '0'; svg.style.top = '0';
+    svg.style.overflow = 'visible'; svg.style.pointerEvents = 'none';
+    svg.setAttribute('width', '1'); svg.setAttribute('height', '1');
     const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-    g.setAttribute('transform', `translate(${tx}, ${ty}) scale(${scaleX}, ${scaleY})`);
-    
+    g.setAttribute('transform', `translate(${relLeft - poX * scaleX}, ${relTop - poY * scaleY}) scale(${scaleX}, ${scaleY})`);
     const pathEl = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     pathEl.setAttribute('d', pathString);
-    pathEl.setAttribute('stroke', fabricChild.stroke || '#000000');
-    pathEl.setAttribute('stroke-width', fabricChild.strokeWidth || 3);
+    pathEl.setAttribute('stroke', fc.stroke || '#000000');
+    pathEl.setAttribute('stroke-width', fc.strokeWidth || 3);
     pathEl.setAttribute('fill', 'none');
-    pathEl.setAttribute('stroke-linecap', 'round');
-    pathEl.setAttribute('stroke-linejoin', 'round');
-    
-    g.appendChild(pathEl);
-    svg.appendChild(g);
-    parentEl.appendChild(svg);
+    pathEl.setAttribute('stroke-linecap', 'round'); pathEl.setAttribute('stroke-linejoin', 'round');
+    g.appendChild(pathEl); svg.appendChild(g); parentEl.appendChild(svg);
   };
 
-  /**
-   * Render a solid shape child inside a group.
-   */
-  const renderSolidChild = (fabricChild, childObj, relLeft, relTop, scaleX, scaleY, angle, parentEl) => {
+  const renderSolidChild = (fc, childObj, relLeft, relTop, scaleX, scaleY, angle, parentEl) => {
     const el = document.createElement('div');
-    el.id = fabricChild.id;
-    el.style.position = 'absolute';
-    el.style.transformOrigin = 'center center';
-
-    let childWidth = 0;
-    let childHeight = 0;
-    const fillColor = childObj.fill || fabricChild.fill;
-
-    if (fabricChild.type === 'rect' || fabricChild.type === 'rectangle') {
-      childWidth = (fabricChild.width || 100) * scaleX;
-      childHeight = (fabricChild.height || 100) * scaleY;
-      el.style.width = childWidth + 'px';
-      el.style.height = childHeight + 'px';
-      el.style.backgroundColor = fillColor || '#3b82f6';
-    } else if (fabricChild.type === 'circle') {
-      const radius = fabricChild.radius || 50;
-      childWidth = radius * 2 * scaleX;
-      childHeight = radius * 2 * scaleY;
-      el.style.width = childWidth + 'px';
-      el.style.height = childHeight + 'px';
-      el.style.borderRadius = '50%';
-      el.style.backgroundColor = fillColor || '#ef4444';
-    } else if (fabricChild.type === 'text') {
-      el.textContent = fabricChild.text || 'Text';
-      el.style.fontSize = ((fabricChild.fontSize || 24) * scaleY) + 'px';
-      el.style.color = fillColor || '#000000';
-      el.style.whiteSpace = 'nowrap';
-      childWidth = (fabricChild.width || 50) * scaleX;
-      childHeight = (fabricChild.height || 24) * scaleY;
+    el.id = fc.id; el.style.position = 'absolute'; el.style.transformOrigin = 'center center';
+    let cw = 0, ch = 0;
+    const fillColor = childObj.fill || fc.fill;
+    if (fc.type === 'rect' || fc.type === 'rectangle') {
+      cw = (fc.width || 100) * scaleX; ch = (fc.height || 100) * scaleY;
+      el.style.width = cw + 'px'; el.style.height = ch + 'px'; el.style.backgroundColor = fillColor || '#3b82f6';
+    } else if (fc.type === 'circle') {
+      const r = fc.radius || 50; cw = r * 2 * scaleX; ch = r * 2 * scaleY;
+      el.style.width = cw + 'px'; el.style.height = ch + 'px'; el.style.borderRadius = '50%'; el.style.backgroundColor = fillColor || '#ef4444';
+    } else if (fc.type === 'text') {
+      el.textContent = fc.text || 'Text'; el.style.fontSize = ((fc.fontSize || 24) * scaleY) + 'px';
+      el.style.color = fillColor || '#000000'; el.style.whiteSpace = 'nowrap';
+      cw = (fc.width || 50) * scaleX; ch = (fc.height || 24) * scaleY;
     }
-
-    el.style.left = (relLeft - childWidth / 2) + 'px';
-    el.style.top = (relTop - childHeight / 2) + 'px';
-    
-    if (angle) {
-      el.style.transform = `rotate(${angle}deg)`;
-    }
-
+    el.style.left = (relLeft - cw / 2) + 'px'; el.style.top = (relTop - ch / 2) + 'px';
+    if (angle) el.style.transform = `rotate(${angle}deg)`;
     parentEl.appendChild(el);
   };
 
-  /**
-   * Render a standalone path using wrapper div approach.
-   * 
-   * CRITICAL FIX: Uses a wrapper div with left/top for positioning,
-   * and the SVG is offset inside the wrapper so the pivot point is at (0,0).
-   * Rotation is applied to the wrapper via GSAP (no CSS translate involved).
-   * This decouples position from rotation completely.
-   */
-  const renderPath = (obj, objKeyframes) => {
+  // ===== STANDALONE PATH (with embedded fills) =====
+  const renderPath = (obj, objKfs) => {
     const container = containerRef.current;
     const timeline = timelineRef.current;
-    if (objKeyframes.length === 0) return;
-
-    const fabricObject = fabricCanvas?.getObjects().find(o => o.id === obj.id);
-    
-    const anchorX = obj.anchorX ?? 0.5;
-    const anchorY = obj.anchorY ?? 0.5;
-    const firstKf = objKeyframes[0];
-
-    // Get path geometry from fabric object
-    let pathOffsetX = 0;
-    let pathOffsetY = 0;
-    let objWidth = 0;
-    let objHeight = 0;
-    
-    if (fabricObject) {
-      pathOffsetX = fabricObject.pathOffset?.x || 0;
-      pathOffsetY = fabricObject.pathOffset?.y || 0;
-      objWidth = fabricObject.width || 0;
-      objHeight = fabricObject.height || 0;
-    }
-
-    // Pivot point in SVG coordinate space
-    const pivotX = pathOffsetX + (anchorX - 0.5) * objWidth;
-    const pivotY = pathOffsetY + (anchorY - 0.5) * objHeight;
-
-    // Create wrapper div - positioned at the keyframe position
+    if (objKfs.length === 0) return;
+    const fo = fabricCanvas?.getObjects().find(o => o.id === obj.id);
+    const anchorX = obj.anchorX ?? 0.5, anchorY = obj.anchorY ?? 0.5;
+    const firstKf = objKfs[0];
+    let ow = 0, oh = 0;
+    if (fo) { ow = fo.width || 0; oh = fo.height || 0; }
+    // SVG offset = negative of wrapper initial position (absolute path coords map to canvas)
+    const svgOffsetX = firstKf.properties.x;
+    const svgOffsetY = firstKf.properties.y;
+    // Anchor offset from center for transform-origin
+    const anchorOffsetX = (anchorX - 0.5) * ow;
+    const anchorOffsetY = (anchorY - 0.5) * oh;
     const wrapper = document.createElement('div');
-    wrapper.id = obj.id;
-    wrapper.style.position = 'absolute';
-    wrapper.style.left = firstKf.properties.x + 'px';
-    wrapper.style.top = firstKf.properties.y + 'px';
-    wrapper.style.width = '0px';
-    wrapper.style.height = '0px';
-    wrapper.style.overflow = 'visible';
-    wrapper.style.transformOrigin = '0px 0px';
+    wrapper.id = obj.id; wrapper.style.position = 'absolute';
+    wrapper.style.left = firstKf.properties.x + 'px'; wrapper.style.top = firstKf.properties.y + 'px';
+    wrapper.style.width = '0px'; wrapper.style.height = '0px'; wrapper.style.overflow = 'visible';
+    wrapper.style.transformOrigin = anchorOffsetX + 'px ' + anchorOffsetY + 'px';
     wrapper.style.zIndex = (firstKf.properties.zIndex ?? 0).toString();
 
-    // Create SVG inside wrapper, offset so pivot aligns with wrapper origin
+    // Render embedded fill images FIRST (behind strokes)
+    if (obj.fills?.length > 0) {
+      obj.fills.forEach(fill => {
+        const img = document.createElement('img');
+        img.src = fill.dataURL;
+        img.style.position = 'absolute';
+        img.style.left = fill.relLeft + 'px';
+        img.style.top = fill.relTop + 'px';
+        img.style.width = fill.width + 'px';
+        img.style.height = fill.height + 'px';
+        img.style.pointerEvents = 'none';
+        img.style.imageRendering = 'pixelated';
+        wrapper.appendChild(img);
+      });
+    }
+
+    // SVG stroke path on top — use <g transform> so path coords are relative to wrapper
+    // This ensures strokes move with the wrapper during GSAP animation
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    svg.style.position = 'absolute';
-    svg.style.left = (-pivotX) + 'px';
-    svg.style.top = (-pivotY) + 'px';
-    svg.style.overflow = 'visible';
-    svg.style.pointerEvents = 'none';
-    svg.setAttribute('width', CANVAS_WIDTH);
-    svg.setAttribute('height', CANVAS_HEIGHT);
-
-    const pathElement = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    pathElement.setAttribute('d', fabricPathToSVGPath(obj.pathData));
-    pathElement.setAttribute('stroke', obj.strokeColor || '#000000');
-    pathElement.setAttribute('stroke-width', obj.strokeWidth || 3);
-    pathElement.setAttribute('fill', 'none');
-    pathElement.setAttribute('stroke-linecap', 'round');
-    pathElement.setAttribute('stroke-linejoin', 'round');
-
-    svg.appendChild(pathElement);
-    wrapper.appendChild(svg);
-    container.appendChild(wrapper);
-
-    // Set initial transform (rotation, scale, opacity only - no x/y translate!)
-    gsap.set(wrapper, {
-      scaleX: firstKf.properties.scaleX,
-      scaleY: firstKf.properties.scaleY,
-      rotation: firstKf.properties.rotation,
-      opacity: firstKf.properties.opacity,
-    });
-
-    // Animate using left/top (not x/y)
-    for (let i = 1; i < objKeyframes.length; i++) {
-      const prevKf = objKeyframes[i - 1];
-      const currKf = objKeyframes[i];
+    svg.style.position = 'absolute'; svg.style.left = '0px'; svg.style.top = '0px';
+    svg.style.overflow = 'visible'; svg.style.pointerEvents = 'none';
+    svg.setAttribute('width', '1'); svg.setAttribute('height', '1');
+    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    g.setAttribute('transform', `translate(${-svgOffsetX}, ${-svgOffsetY})`);
+    const pathEl = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    pathEl.setAttribute('d', fabricPathToSVGPath(obj.pathData));
+    pathEl.setAttribute('stroke', obj.strokeColor || '#000000');
+    pathEl.setAttribute('stroke-width', obj.strokeWidth || 3);
+    pathEl.setAttribute('fill', 'none');
+    pathEl.setAttribute('stroke-linecap', 'round'); pathEl.setAttribute('stroke-linejoin', 'round');
+    g.appendChild(pathEl); svg.appendChild(g); wrapper.appendChild(svg); container.appendChild(wrapper);
+    gsap.set(wrapper, { scaleX: firstKf.properties.scaleX, scaleY: firstKf.properties.scaleY,
+      rotation: firstKf.properties.rotation, opacity: firstKf.properties.opacity });
+    for (let i = 1; i < objKfs.length; i++) {
+      const prev = objKfs[i - 1], curr = objKfs[i];
       timeline.to(wrapper, {
-        duration: currKf.time - prevKf.time,
-        left: currKf.properties.x + 'px',
-        top: currKf.properties.y + 'px',
-        scaleX: currKf.properties.scaleX,
-        scaleY: currKf.properties.scaleY,
-        rotation: currKf.properties.rotation,
-        opacity: currKf.properties.opacity,
-        zIndex: currKf.properties.zIndex ?? 0,
-        ease: currKf.easing || 'none',
-      }, prevKf.time);
+        duration: curr.time - prev.time, left: curr.properties.x + 'px', top: curr.properties.y + 'px',
+        scaleX: curr.properties.scaleX, scaleY: curr.properties.scaleY,
+        rotation: curr.properties.rotation, opacity: curr.properties.opacity,
+        zIndex: curr.properties.zIndex ?? 0, ease: curr.easing || 'none',
+      }, prev.time);
     }
   };
 
-  /**
-   * Render a regular element (rectangle, circle, text).
-   */
-  const renderRegular = (obj, objKeyframes) => {
+  // ===== REGULAR (rect, circle, text) =====
+  const renderRegular = (obj, objKfs) => {
     const container = containerRef.current;
     const timeline = timelineRef.current;
-    if (objKeyframes.length === 0) return;
-
-    const firstKf = objKeyframes[0];
-    
-    const anchorX = obj.anchorX ?? 0.5;
-    const anchorY = obj.anchorY ?? 0.5;
-    const elWidth = 100;
-    const elHeight = 100;
+    if (objKfs.length === 0) return;
+    const firstKf = objKfs[0];
+    const anchorX = obj.anchorX ?? 0.5, anchorY = obj.anchorY ?? 0.5;
+    const ew = 100, eh = 100;
     const fillColor = obj.fill || getDefaultFillColor(obj.type);
-
     const el = document.createElement('div');
-    el.id = obj.id;
-    el.style.position = 'absolute';
+    el.id = obj.id; el.style.position = 'absolute';
     el.style.transformOrigin = `${anchorX * 100}% ${anchorY * 100}%`;
     el.style.zIndex = (firstKf.properties.zIndex ?? 0).toString();
-
-    if (obj.type === 'rectangle') {
-      el.style.width = elWidth + 'px';
-      el.style.height = elHeight + 'px';
-      el.style.backgroundColor = fillColor;
-    } else if (obj.type === 'circle') {
-      el.style.width = elWidth + 'px';
-      el.style.height = elHeight + 'px';
-      el.style.borderRadius = '50%';
-      el.style.backgroundColor = fillColor;
-    } else if (obj.type === 'text') {
-      const fabricObject = fabricCanvas?.getObjects().find(o => o.id === obj.id);
-      el.textContent = fabricObject?.text || obj.textContent || 'Text';
-      el.style.fontSize = '24px';
-      el.style.color = fillColor;
-      el.style.whiteSpace = 'nowrap';
+    if (obj.type === 'rectangle') { el.style.width = ew + 'px'; el.style.height = eh + 'px'; el.style.backgroundColor = fillColor; }
+    else if (obj.type === 'circle') { el.style.width = ew + 'px'; el.style.height = eh + 'px'; el.style.borderRadius = '50%'; el.style.backgroundColor = fillColor; }
+    else if (obj.type === 'text') {
+      const fo = fabricCanvas?.getObjects().find(o => o.id === obj.id);
+      el.textContent = fo?.text || obj.textContent || 'Text'; el.style.fontSize = '24px'; el.style.color = fillColor; el.style.whiteSpace = 'nowrap';
     }
-
-    el.style.left = (firstKf.properties.x - anchorX * elWidth) + 'px';
-    el.style.top = (firstKf.properties.y - anchorY * elHeight) + 'px';
-    
+    el.style.left = (firstKf.properties.x - anchorX * ew) + 'px';
+    el.style.top = (firstKf.properties.y - anchorY * eh) + 'px';
     container.appendChild(el);
-
-    gsap.set(el, {
-      scaleX: firstKf.properties.scaleX,
-      scaleY: firstKf.properties.scaleY,
-      rotation: firstKf.properties.rotation,
-      opacity: firstKf.properties.opacity,
-    });
-
-    for (let i = 1; i < objKeyframes.length; i++) {
-      const prevKf = objKeyframes[i - 1];
-      const currKf = objKeyframes[i];
+    gsap.set(el, { scaleX: firstKf.properties.scaleX, scaleY: firstKf.properties.scaleY,
+      rotation: firstKf.properties.rotation, opacity: firstKf.properties.opacity });
+    for (let i = 1; i < objKfs.length; i++) {
+      const prev = objKfs[i - 1], curr = objKfs[i];
       timeline.to(el, {
-        duration: currKf.time - prevKf.time,
-        left: (currKf.properties.x - anchorX * elWidth) + 'px',
-        top: (currKf.properties.y - anchorY * elHeight) + 'px',
-        scaleX: currKf.properties.scaleX,
-        scaleY: currKf.properties.scaleY,
-        rotation: currKf.properties.rotation,
-        opacity: currKf.properties.opacity,
-        zIndex: currKf.properties.zIndex ?? 0,
-        ease: currKf.easing || 'none',
-      }, prevKf.time);
+        duration: curr.time - prev.time,
+        left: (curr.properties.x - anchorX * ew) + 'px', top: (curr.properties.y - anchorY * eh) + 'px',
+        scaleX: curr.properties.scaleX, scaleY: curr.properties.scaleY,
+        rotation: curr.properties.rotation, opacity: curr.properties.opacity,
+        zIndex: curr.properties.zIndex ?? 0, ease: curr.easing || 'none',
+      }, prev.time);
     }
   };
 
   return (
     <Paper sx={{ p: 2, mt: 2 }}>
-      <Typography variant="h6" gutterBottom>
-        Live Preview (GSAP)
-      </Typography>
+      <Typography variant="h6" gutterBottom>Live Preview (GSAP)</Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
         This preview always loops to help you review your animation • Loop: ENABLED ♾️
       </Typography>
-      <Box
-        ref={containerRef}
-        sx={{
-          position: 'relative',
-          width: `${CANVAS_WIDTH}px`,
-          height: `${CANVAS_HEIGHT}px`,
-          bgcolor: '#f0f0f0',
-          overflow: 'hidden',
-          border: '1px solid',
-          borderColor: 'divider',
-        }}
-      />
+      <Box ref={containerRef} sx={{ position: 'relative', width: `${CANVAS_WIDTH}px`, height: `${CANVAS_HEIGHT}px`,
+        bgcolor: canvasBgColor, overflow: 'hidden', border: '1px solid', borderColor: 'divider' }} />
     </Paper>
   );
 };
