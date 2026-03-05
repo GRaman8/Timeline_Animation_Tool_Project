@@ -1,6 +1,10 @@
 /**
  * Code Generator - Produces standalone HTML/CSS/JS animation
  * Supports: rectangles, circles, text, paths (with embedded fills), groups, canvas bg color
+ * 
+ * FIX: Path objects now use pathOffset for SVG <g> translate instead of keyframe x/y.
+ * This ensures multi-part drawings (like stickman body + arms) stay correctly aligned
+ * across all keyframes in exported code.
  */
 
 import { normalizeKeyframeRotations } from './interpolation';
@@ -152,15 +156,30 @@ document.addEventListener('DOMContentLoaded', () => {
 };
 
 // ========== PATH CREATION (with embedded fills) ==========
+//
+// FIX: The SVG <g> translate must use -pathOffset, NOT -firstKeyframe.x/y.
+//
+// WHY: The path SVG data contains absolute canvas coordinates (e.g. M 397 115).
+// Fabric stores left/top as the center of the path (pathOffset mapped to canvas).
+// So the correct transform to center the SVG on the wrapper is translate(-pathOffset).
+//
+// Previously, translate(-firstKf.x, -firstKf.y) was used. This happened to produce
+// a SIMILAR result for the first keyframe (because left/top ≈ pathOffset at that position),
+// but they're NOT the same value — left/top is the canvas position while pathOffset is the
+// path's internal center. The small difference caused drift when animating to other keyframes.
+//
+// With the fix, the <g> translate is CONSTANT (-pathOffset), and GSAP animates the wrapper's
+// left/top. Since Fabric's left/top for a path IS the pathOffset mapped to canvas coordinates,
+// moving the wrapper by the same delta as Fabric moves the path keeps everything aligned.
+//
 const generatePathCreation = (obj, firstKf, fabricCanvas) => {
   const pathString = fabricPathToSVGPath(obj.pathData);
-  // SVG offset = negative of wrapper initial position so absolute path coords map to canvas correctly
-  const svgOffsetX = firstKf.properties.x;
-  const svgOffsetY = firstKf.properties.y;
-  // transformOrigin MUST be 0,0 — the wrapper div is positioned at the Fabric origin point
-  // (which is the anchor/pivot point). Rotation should pivot exactly at that point.
-  // The old formula (anchorX-0.5)*width was WRONG: it double-counted the anchor offset
-  // because the wrapper position already IS the anchor position.
+  
+  // FIX: Get pathOffset from the fabric object
+  const fo = fabricCanvas?.getObjects().find(o => o.id === obj.id);
+  const pathOffsetX = fo?.pathOffset?.x || firstKf.properties.pathOffsetX || 0;
+  const pathOffsetY = fo?.pathOffset?.y || firstKf.properties.pathOffsetY || 0;
+  
   const zIndex = firstKf.properties.zIndex ?? 0;
   const wrapperId = obj.id;
   let js = `    // Create ${obj.name} (SVG Path with wrapper)
@@ -194,6 +213,7 @@ const generatePathCreation = (obj, firstKf, fabricCanvas) => {
     });
   }
 
+  // FIX: Use -pathOffset for the <g> translate, not -firstKf position
   js += `    var svg_${wrapperId} = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     svg_${wrapperId}.style.position = 'absolute';
     svg_${wrapperId}.style.left = '0px';
@@ -203,7 +223,7 @@ const generatePathCreation = (obj, firstKf, fabricCanvas) => {
     svg_${wrapperId}.setAttribute('width', '1');
     svg_${wrapperId}.setAttribute('height', '1');
     var g_${wrapperId} = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-    g_${wrapperId}.setAttribute('transform', 'translate(${(-svgOffsetX).toFixed(2)}, ${(-svgOffsetY).toFixed(2)})');
+    g_${wrapperId}.setAttribute('transform', 'translate(${(-pathOffsetX).toFixed(2)}, ${(-pathOffsetY).toFixed(2)})');
     var path_${wrapperId} = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     path_${wrapperId}.setAttribute('d', '${pathString}');
     path_${wrapperId}.setAttribute('stroke', '${obj.strokeColor || '#000000'}');
@@ -228,8 +248,6 @@ const generatePathCreation = (obj, firstKf, fabricCanvas) => {
 
 // ========== GROUP CREATION ==========
 const generateGroupCreation = (obj, firstKf, canvasObjects, fabricCanvas) => {
-  // transformOrigin = 0,0 because wrapper is positioned at the Fabric origin point (anchor).
-  // Rotation pivots around that point naturally. No additional offset needed.
   const zIndex = firstKf.properties.zIndex ?? 0;
   let js = `    // Create ${obj.name} (Group)
     const ${obj.id} = document.createElement('div');

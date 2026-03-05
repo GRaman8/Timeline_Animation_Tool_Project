@@ -93,7 +93,6 @@ const Canvas = () => {
 
   /**
    * Sync all fill images to follow their parent path's current position.
-   * Fill images store _relLeft/_relTop (offset from parent's left/top at creation).
    */
   const syncFillsForPath = (pathId) => {
     if (!fabricCanvas) return;
@@ -107,7 +106,7 @@ const Canvas = () => {
     });
   };
 
-  /** Sync fills for ALL paths that have child fills (used during animation) */
+  /** Sync fills for ALL paths */
   const syncAllFills = () => {
     if (!fabricCanvas) return;
     const pathIds = new Set();
@@ -142,11 +141,15 @@ const Canvas = () => {
       if (e.target) {
         updateProps(e.target);
         if (e.target.type === 'path') {
+          // Store pathOffset in canvasObject data for LivePreview/Export
           setCanvasObjects(prev => prev.map(obj => 
             obj.id === e.target.id ? { ...obj, pathData: e.target.path, strokeColor: e.target.stroke,
-              strokeWidth: e.target.strokeWidth, boundingBox: { width: e.target.width, height: e.target.height } } : obj));
+              strokeWidth: e.target.strokeWidth, boundingBox: { width: e.target.width, height: e.target.height },
+              pathOffsetX: e.target.pathOffset?.x || 0,
+              pathOffsetY: e.target.pathOffset?.y || 0,
+            } : obj));
         }
-        // Sync fills after any modification (drag end, scale, rotate)
+        // Sync fills after modification
         const pathId = e.target.id;
         canvas.getObjects().forEach(o => {
           if (o._isFill && o._parentId === pathId) {
@@ -162,7 +165,6 @@ const Canvas = () => {
     canvas.on('object:moving', (e) => {
       if (e.target) {
         updateProps(e.target);
-        // Move fill images with parent — inline to avoid stale closure on fabricCanvas
         const pathId = e.target.id;
         canvas.getObjects().forEach(o => {
           if (o._isFill && o._parentId === pathId) {
@@ -200,23 +202,55 @@ const Canvas = () => {
   }, [canvasBgColor, fabricCanvas]);
 
   // ==================== KEYFRAME SELECTION → SHOW POSITION ====================
+  // FIX: When a keyframe is selected at a particular time, apply interpolated positions 
+  // for ALL objects that have keyframes, not just the selected one.
+  // This shows the complete scene state at that time point, so character parts
+  // (body + arms) are all shown in their correct positions.
   useEffect(() => {
     if (!fabricCanvas || !selectedKeyframe || isPlaying || isInteracting || drawingMode || fillToolActive) return;
     const { objectId, index } = selectedKeyframe;
     const objKfs = keyframes[objectId] || [];
     if (index < 0 || index >= objKfs.length) return;
     const kf = objKfs[index];
+    const targetTime = kf.time;
+    
+    // Apply position for the selected object (exact keyframe values)
     const fo = findFabricObjectById(fabricCanvas, objectId);
-    if (!fo || !kf.properties) return;
-    fo.set({ left: kf.properties.x, top: kf.properties.y, scaleX: kf.properties.scaleX,
-      scaleY: kf.properties.scaleY, angle: kf.properties.rotation, opacity: kf.properties.opacity });
-    fo.setCoords(); fabricCanvas.setActiveObject(fo);
-    // Sync fill images with the path's keyframed position
-    syncFillsForPath(objectId);
+    if (fo && kf.properties) {
+      fo.set({ left: kf.properties.x, top: kf.properties.y, scaleX: kf.properties.scaleX,
+        scaleY: kf.properties.scaleY, angle: kf.properties.rotation, opacity: kf.properties.opacity });
+      fo.setCoords();
+      fabricCanvas.setActiveObject(fo);
+      syncFillsForPath(objectId);
+    }
+    
+    // FIX: Also apply interpolated positions for ALL OTHER objects at this time.
+    // This ensures that when you click a keyframe on the body track at t=1.0,
+    // the arms also show their positions at t=1.0.
+    canvasObjects.forEach(obj => {
+      if (obj.id === objectId) return; // already handled above
+      const otherKfs = keyframes[obj.id] || [];
+      if (otherKfs.length === 0) return;
+      const otherFo = findFabricObjectById(fabricCanvas, obj.id);
+      if (!otherFo) return;
+      
+      const { before, after } = findSurroundingKeyframes(otherKfs, targetTime);
+      if (before && after) {
+        let easingType = 'linear';
+        if (before !== after) easingType = after.easing || 'linear';
+        const interpolated = interpolateProperties(before, after, targetTime, easingType);
+        if (interpolated) {
+          applyPropertiesToFabricObject(otherFo, interpolated);
+          otherFo.setCoords();
+          syncFillsForPath(obj.id);
+        }
+      }
+    });
+    
     fabricCanvas.renderAll();
     const props = extractPropertiesFromFabricObject(fo);
     if (props) setSelectedObjectProperties(props);
-  }, [selectedKeyframe, fabricCanvas, keyframes, isPlaying, drawingMode, fillToolActive]);
+  }, [selectedKeyframe, fabricCanvas, keyframes, isPlaying, drawingMode, fillToolActive, canvasObjects]);
 
   // ==================== PAINT BUCKET (FLOOD FILL) TOOL ====================
   useEffect(() => {
@@ -232,12 +266,10 @@ const Canvas = () => {
       const result = performFloodFill(fabricCanvas, CANVAS_WIDTH, CANVAS_HEIGHT, pointer.x, pointer.y, fillToolColor, 40);
       if (!result) return;
 
-      // Find which path this fill belongs to
       const parentId = findParentPath(result, fabricCanvas, canvasObjectsRef.current);
 
       const imgEl = new Image();
       imgEl.onload = () => {
-        // Compute offset from parent path's position so fill moves with path
         let relLeft = 0, relTop = 0;
         if (parentId) {
           const parentFo = fabricCanvas.getObjects().find(o => o.id === parentId);
@@ -254,21 +286,18 @@ const Canvas = () => {
           originX: 'left', originY: 'top',
           selectable: false, evented: false, id: fillImgId,
         });
-        // Tag as embedded fill — NOT a standalone timeline object
         fabricImg._isFill = true;
         fabricImg._parentId = parentId;
         fabricImg._relLeft = relLeft;
         fabricImg._relTop = relTop;
 
         fabricCanvas.add(fabricImg);
-        // Send fill behind strokes
         try {
           if (typeof fabricCanvas.sendObjectToBack === 'function') fabricCanvas.sendObjectToBack(fabricImg);
           else if (typeof fabricCanvas.sendToBack === 'function') fabricCanvas.sendToBack(fabricImg);
         } catch(err) {}
         fabricCanvas.renderAll();
 
-        // Store fill data inside parent path's canvasObject (embedded, not separate)
         if (parentId) {
           setCanvasObjects(prev => prev.map(obj =>
             obj.id === parentId
@@ -281,7 +310,7 @@ const Canvas = () => {
               : obj
           ));
         } else {
-          console.warn('Paint bucket: no parent path found near click. Draw a shape first, then fill inside it.');
+          console.warn('Paint bucket: no parent path found near click.');
         }
       };
       imgEl.src = result.dataURL;
@@ -318,9 +347,18 @@ const Canvas = () => {
     else pathObject = createCompoundPathFromStrokes(strokes, id, drawingSettings);
     if (pathObject) {
       fabricCanvas.add(pathObject); fabricCanvas.setActiveObject(pathObject); fabricCanvas.renderAll();
-      setCanvasObjects(prev => [...prev, { id, type: 'path', name, pathData: pathObject.path,
+      
+      // Store pathOffset for LivePreview/Export
+      const pathOffsetX = pathObject.pathOffset?.x || 0;
+      const pathOffsetY = pathObject.pathOffset?.y || 0;
+      
+      setCanvasObjects(prev => [...prev, { 
+        id, type: 'path', name, pathData: pathObject.path,
         strokeColor: drawingSettings.color, strokeWidth: drawingSettings.strokeWidth, fillColor: '',
-        boundingBox: { width: pathObject.width, height: pathObject.height } }]);
+        boundingBox: { width: pathObject.width, height: pathObject.height },
+        pathOffsetX,
+        pathOffsetY,
+      }]);
       setKeyframes(prev => ({ ...prev, [id]: [] }));
     }
     committedStrokesRef.current = []; setStrokeCount(0);
@@ -451,7 +489,6 @@ const Canvas = () => {
         const interpolated = interpolateProperties(before, after, currentTime, easingType);
         if (interpolated) applyPropertiesToFabricObject(fo, interpolated);
       });
-      // Move all fill images to follow their animated parent paths
       syncAllFills();
       applyZIndexOrdering(fabricCanvas);
     }
@@ -467,7 +504,6 @@ const Canvas = () => {
     }
     const handleKeyDown = (e) => {
       if (drawingMode || fillToolActive) return;
-      // Don't intercept keys when user is typing in an input (e.g. rename field)
       const tag = e.target.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target.isContentEditable) return;
       if ((e.metaKey || e.ctrlKey) && e.key === 'g' && !e.shiftKey) {
@@ -509,7 +545,6 @@ const Canvas = () => {
             if (fo?.id) {
               const objData = canvasObjects.find(obj => obj.id === fo.id);
               fabricCanvas.remove(fo);
-              // Also remove any embedded fill images belonging to this path
               if (objData?.fills?.length > 0) {
                 const fillIds = new Set(objData.fills.map(f => f.id));
                 fabricCanvas.getObjects().filter(o => o._isFill && fillIds.has(o.id))

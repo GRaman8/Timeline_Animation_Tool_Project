@@ -138,6 +138,10 @@ export const createCompoundPathFromStrokes = (strokes, id, settings) => {
  * 
  * USES left/top DIRECTLY — this is the ORIGIN POINT position.
  * Also extracts zIndex from canvas object order.
+ * 
+ * FIX: For path objects, also extract pathOffset so that LivePreview
+ * and CodeExport can properly compute the SVG <g> transform for each
+ * keyframe, not just the first one.
  */
 export const extractPropertiesFromFabricObject = (fabricObject) => {
   if (!fabricObject) return null;
@@ -166,6 +170,11 @@ export const extractPropertiesFromFabricObject = (fabricObject) => {
       pathData: fabricObject.path,
       strokeColor: fabricObject.stroke,
       strokeWidth: fabricObject.strokeWidth,
+      // FIX: Store pathOffset so we can reconstruct the correct SVG <g> translate
+      // for any keyframe position, not just the first one.
+      // pathOffset is the center of the path's own coordinate system.
+      pathOffsetX: fabricObject.pathOffset?.x || 0,
+      pathOffsetY: fabricObject.pathOffset?.y || 0,
     };
   }
 
