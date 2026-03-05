@@ -26,7 +26,6 @@ import AnchorPointOverlay from './AnchorPointOverlay';
 export const CANVAS_WIDTH = 1400;
 export const CANVAS_HEIGHT = 800;
 
-/** Fabric.js v6.4+ compat: getPointer removed, use getScenePoint */
 const getCanvasPointer = (canvas, nativeEvent) => {
   if (typeof canvas.getScenePoint === 'function') return canvas.getScenePoint(nativeEvent);
   if (typeof canvas.getPointer === 'function') return canvas.getPointer(nativeEvent);
@@ -34,10 +33,6 @@ const getCanvasPointer = (canvas, nativeEvent) => {
   return { x: nativeEvent.clientX - rect.left, y: nativeEvent.clientY - rect.top };
 };
 
-/**
- * Find which path object's bounding box contains the flood-filled region.
- * Returns the path ID with the smallest bounding box (most specific match).
- */
 const findParentPath = (fillResult, fabricCanvas, canvasObjects) => {
   const fillCX = fillResult.left + fillResult.width / 2;
   const fillCY = fillResult.top + fillResult.height / 2;
@@ -87,26 +82,66 @@ const Canvas = () => {
   const committedStrokePathsRef = useRef([]);
   const [strokeCount, setStrokeCount] = useState(0);
 
-  // Ref for latest canvasObjects — avoids stale closures in event handlers
   const canvasObjectsRef = useRef(canvasObjects);
   useEffect(() => { canvasObjectsRef.current = canvasObjects; }, [canvasObjects]);
 
-  /**
-   * Sync all fill images to follow their parent path's current position.
-   */
+  // FIX: Fills correctly inherit parent path transforms via trigonometry locking
+  // Calculates absolute positioning if the object is inside an ActiveSelection (e.g., editing)
   const syncFillsForPath = (pathId) => {
     if (!fabricCanvas) return;
-    const parentFo = fabricCanvas.getObjects().find(o => o.id === pathId);
+    
+    // Find parent object (also search inside ActiveSelection if dragging)
+    let parentFo = fabricCanvas.getObjects().find(o => o.id === pathId);
+    if (!parentFo) {
+      const activeObj = fabricCanvas.getActiveObject();
+      if (activeObj && activeObj.type === 'activeSelection') {
+        parentFo = activeObj._objects?.find(o => o.id === pathId);
+      }
+    }
     if (!parentFo) return;
+
+    // Default to parent's direct transforms
+    let absLeft = parentFo.left || 0;
+    let absTop = parentFo.top || 0;
+    let absScaleX = parentFo.scaleX || 1;
+    let absScaleY = parentFo.scaleY || 1;
+    let absAngle = parentFo.angle || 0;
+
+    // If grouped temporarily (ActiveSelection edit mode), extract absolute canvas coordinates
+    if (parentFo.group && parentFo.group.type === 'activeSelection') {
+      const matrix = parentFo.calcTransformMatrix();
+      const options = fabric.util.qrDecompose(matrix);
+      absLeft = options.translateX;
+      absTop = options.translateY;
+      absScaleX = options.scaleX;
+      absScaleY = options.scaleY;
+      absAngle = options.angle;
+    }
+
     fabricCanvas.getObjects().forEach(o => {
       if (o._isFill && o._parentId === pathId) {
-        o.set({ left: parentFo.left + (o._relLeft || 0), top: parentFo.top + (o._relTop || 0) });
+        const rad = (absAngle || 0) * Math.PI / 180;
+        const sx = absScaleX || 1;
+        const sy = absScaleY || 1;
+        const rx = (o._relLeft || 0) * sx;
+        const ry = (o._relTop || 0) * sy;
+        
+        // Rotate the embedded fill offset by the absolute angle
+        const tx = rx * Math.cos(rad) - ry * Math.sin(rad);
+        const ty = rx * Math.sin(rad) + ry * Math.cos(rad);
+        
+        o.set({ 
+          left: absLeft + tx, 
+          top: absTop + ty,
+          angle: absAngle,
+          scaleX: sx,
+          scaleY: sy
+        });
         o.setCoords();
       }
     });
   };
 
-  /** Sync fills for ALL paths */
   const syncAllFills = () => {
     if (!fabricCanvas) return;
     const pathIds = new Set();
@@ -137,46 +172,46 @@ const Canvas = () => {
       else if (e.selected?.length > 1) { setSelectedObject(null); updateProps(e.selected[0]); }
     });
     canvas.on('selection:cleared', () => { setHasActiveSelection(false); setSelectedObject(null); });
+    
+    // FIX: Bind all transformations directly to syncAllFills so they never detach
+    canvas.on('object:moving', (e) => {
+      if (e.target) {
+        updateProps(e.target);
+        syncAllFills();
+        canvas.renderAll();
+      }
+    });
+    canvas.on('object:scaling', (e) => { 
+      if (e.target) {
+        updateProps(e.target);
+        syncAllFills();
+        canvas.renderAll();
+      }
+    });
+    canvas.on('object:rotating', (e) => { 
+      if (e.target) {
+        updateProps(e.target);
+        syncAllFills();
+        canvas.renderAll();
+      }
+    });
     canvas.on('object:modified', (e) => {
       if (e.target) {
         updateProps(e.target);
         if (e.target.type === 'path') {
-          // Store pathOffset in canvasObject data for LivePreview/Export
           setCanvasObjects(prev => prev.map(obj => 
             obj.id === e.target.id ? { ...obj, pathData: e.target.path, strokeColor: e.target.stroke,
               strokeWidth: e.target.strokeWidth, boundingBox: { width: e.target.width, height: e.target.height },
-              pathOffsetX: e.target.pathOffset?.x || 0,
-              pathOffsetY: e.target.pathOffset?.y || 0,
+              pathOffsetX: e.target.pathOffset?.x || 0, pathOffsetY: e.target.pathOffset?.y || 0,
             } : obj));
         }
-        // Sync fills after modification
-        const pathId = e.target.id;
-        canvas.getObjects().forEach(o => {
-          if (o._isFill && o._parentId === pathId) {
-            o.set({ left: e.target.left + (o._relLeft || 0), top: e.target.top + (o._relTop || 0) });
-            o.setCoords();
-          }
-        });
+        syncAllFills();
         canvas.renderAll();
       }
     });
     canvas.on('mouse:down', (e) => { if (e.target) { setIsInteracting(true); interactingObjectRef.current = e.target.id; } });
     canvas.on('mouse:up', () => { setIsInteracting(false); interactingObjectRef.current = null; });
-    canvas.on('object:moving', (e) => {
-      if (e.target) {
-        updateProps(e.target);
-        const pathId = e.target.id;
-        canvas.getObjects().forEach(o => {
-          if (o._isFill && o._parentId === pathId) {
-            o.set({ left: e.target.left + (o._relLeft || 0), top: e.target.top + (o._relTop || 0) });
-            o.setCoords();
-          }
-        });
-        canvas.renderAll();
-      }
-    });
-    canvas.on('object:scaling', (e) => { if (e.target) updateProps(e.target); });
-    canvas.on('object:rotating', (e) => { if (e.target) updateProps(e.target); });
+    
     canvas.on('mouse:dblclick', (e) => {
       if (e.target && e.target.type === 'text') {
         const newText = prompt('Enter new text:', e.target.text);
@@ -194,41 +229,36 @@ const Canvas = () => {
     if (props) setSelectedObjectProperties(props);
   };
 
-  // ==================== BG COLOR ====================
   useEffect(() => {
     if (!fabricCanvas) return;
     fabricCanvas.backgroundColor = canvasBgColor;
     fabricCanvas.renderAll();
   }, [canvasBgColor, fabricCanvas]);
 
-  // ==================== KEYFRAME SELECTION → SHOW POSITION ====================
-  // FIX: When a keyframe is selected at a particular time, apply interpolated positions 
-  // for ALL objects that have keyframes, not just the selected one.
-  // This shows the complete scene state at that time point, so character parts
-  // (body + arms) are all shown in their correct positions.
   useEffect(() => {
     if (!fabricCanvas || !selectedKeyframe || isPlaying || isInteracting || drawingMode || fillToolActive) return;
+    
+    // FIX: Clear ActiveSelection safely so keyframe scrubbing doesn't corrupt object positions
+    if (fabricCanvas.getActiveObject()?.type === 'activeSelection') {
+        fabricCanvas.discardActiveObject();
+    }
+    
     const { objectId, index } = selectedKeyframe;
     const objKfs = keyframes[objectId] || [];
     if (index < 0 || index >= objKfs.length) return;
     const kf = objKfs[index];
     const targetTime = kf.time;
     
-    // Apply position for the selected object (exact keyframe values)
     const fo = findFabricObjectById(fabricCanvas, objectId);
     if (fo && kf.properties) {
       fo.set({ left: kf.properties.x, top: kf.properties.y, scaleX: kf.properties.scaleX,
         scaleY: kf.properties.scaleY, angle: kf.properties.rotation, opacity: kf.properties.opacity });
       fo.setCoords();
       fabricCanvas.setActiveObject(fo);
-      syncFillsForPath(objectId);
     }
     
-    // FIX: Also apply interpolated positions for ALL OTHER objects at this time.
-    // This ensures that when you click a keyframe on the body track at t=1.0,
-    // the arms also show their positions at t=1.0.
     canvasObjects.forEach(obj => {
-      if (obj.id === objectId) return; // already handled above
+      if (obj.id === objectId) return; 
       const otherKfs = keyframes[obj.id] || [];
       if (otherKfs.length === 0) return;
       const otherFo = findFabricObjectById(fabricCanvas, obj.id);
@@ -242,11 +272,11 @@ const Canvas = () => {
         if (interpolated) {
           applyPropertiesToFabricObject(otherFo, interpolated);
           otherFo.setCoords();
-          syncFillsForPath(obj.id);
         }
       }
     });
     
+    syncAllFills();
     fabricCanvas.renderAll();
     const props = extractPropertiesFromFabricObject(fo);
     if (props) setSelectedObjectProperties(props);
@@ -281,15 +311,11 @@ const Canvas = () => {
 
         const fillImgId = `_fill_${Date.now()}`;
         const fabricImg = new fabric.Image(imgEl, {
-          left: result.left, top: result.top,
-          width: result.width, height: result.height,
-          originX: 'left', originY: 'top',
-          selectable: false, evented: false, id: fillImgId,
+          left: result.left, top: result.top, width: result.width, height: result.height,
+          originX: 'left', originY: 'top', selectable: false, evented: false, id: fillImgId,
         });
-        fabricImg._isFill = true;
-        fabricImg._parentId = parentId;
-        fabricImg._relLeft = relLeft;
-        fabricImg._relTop = relTop;
+        fabricImg._isFill = true; fabricImg._parentId = parentId;
+        fabricImg._relLeft = relLeft; fabricImg._relTop = relTop;
 
         fabricCanvas.add(fabricImg);
         try {
@@ -302,10 +328,8 @@ const Canvas = () => {
           setCanvasObjects(prev => prev.map(obj =>
             obj.id === parentId
               ? { ...obj, fills: [...(obj.fills || []), {
-                  id: fillImgId, dataURL: result.dataURL,
-                  left: result.left, top: result.top,
-                  width: result.width, height: result.height,
-                  color: fillToolColor, relLeft, relTop,
+                  id: fillImgId, dataURL: result.dataURL, left: result.left, top: result.top,
+                  width: result.width, height: result.height, color: fillToolColor, relLeft, relTop,
                 }]}
               : obj
           ));
@@ -332,7 +356,6 @@ const Canvas = () => {
     };
   }, [fabricCanvas, fillToolActive, fillToolColor, setCanvasObjects, setFillToolActive]);
 
-  // ==================== MULTI-STROKE DRAWING ====================
   const commitDrawing = () => {
     if (!fabricCanvas) return;
     const strokes = committedStrokesRef.current;
@@ -347,8 +370,6 @@ const Canvas = () => {
     else pathObject = createCompoundPathFromStrokes(strokes, id, drawingSettings);
     if (pathObject) {
       fabricCanvas.add(pathObject); fabricCanvas.setActiveObject(pathObject); fabricCanvas.renderAll();
-      
-      // Store pathOffset for LivePreview/Export
       const pathOffsetX = pathObject.pathOffset?.x || 0;
       const pathOffsetY = pathObject.pathOffset?.y || 0;
       
@@ -356,8 +377,7 @@ const Canvas = () => {
         id, type: 'path', name, pathData: pathObject.path,
         strokeColor: drawingSettings.color, strokeWidth: drawingSettings.strokeWidth, fillColor: '',
         boundingBox: { width: pathObject.width, height: pathObject.height },
-        pathOffsetX,
-        pathOffsetY,
+        pathOffsetX, pathOffsetY,
       }]);
       setKeyframes(prev => ({ ...prev, [id]: [] }));
     }
@@ -467,7 +487,6 @@ const Canvas = () => {
     };
   }, [fabricCanvas, drawingMode, drawingSettings, canvasObjects, setCanvasObjects, setKeyframes, setDrawingMode]);
 
-  // ==================== CANVAS UPDATE / INTERPOLATION ====================
   useEffect(() => {
     if (!fabricCanvas || isInteracting) return;
     fabricCanvas.forEachObject(obj => {
@@ -478,6 +497,10 @@ const Canvas = () => {
       if (fo && fabricCanvas.getActiveObject() !== fo) fabricCanvas.setActiveObject(fo);
     }
     if (isPlaying) {
+      if (fabricCanvas.getActiveObject()) {
+          fabricCanvas.discardActiveObject();
+      }
+
       canvasObjects.forEach(obj => {
         const objKfs = keyframes[obj.id] || [];
         if (objKfs.length === 0) return;
@@ -487,7 +510,10 @@ const Canvas = () => {
         let easingType = 'linear';
         if (before && after && before !== after) easingType = after.easing || 'linear';
         const interpolated = interpolateProperties(before, after, currentTime, easingType);
-        if (interpolated) applyPropertiesToFabricObject(fo, interpolated);
+        if (interpolated) {
+            applyPropertiesToFabricObject(fo, interpolated);
+            fo.setCoords();
+        }
       });
       syncAllFills();
       applyZIndexOrdering(fabricCanvas);
@@ -495,7 +521,6 @@ const Canvas = () => {
     fabricCanvas.renderAll();
   }, [currentTime, keyframes, canvasObjects, fabricCanvas, isInteracting, selectedObject, isPlaying, drawingMode, fillToolActive]);
 
-  // ==================== KEYBOARD SHORTCUTS ====================
   useEffect(() => {
     if (!fabricCanvas || isInteracting) return;
     if (selectedObject && !isPlaying && !drawingMode && !fillToolActive) {
@@ -565,7 +590,6 @@ const Canvas = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [fabricCanvas, drawingMode, fillToolActive, canvasObjects, setCanvasObjects, setKeyframes, setSelectedObject, selectedObject]);
 
-  // ==================== RENDER ====================
   const activeToolLabel = fillToolActive ? '🪣 Paint Bucket Mode' : drawingMode ? '🎨 Drawing Mode' : null;
 
   return (

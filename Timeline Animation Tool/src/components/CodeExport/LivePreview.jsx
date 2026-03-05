@@ -135,21 +135,6 @@ const LivePreview = () => {
   };
 
   // ===== STANDALONE PATH (with embedded fills) =====
-  // 
-  // FIX: The previous approach used the first keyframe's x/y as the SVG <g> translate
-  // offset. This meant the <g> translate was hardcoded to ONE position. When the wrapper
-  // moved to subsequent keyframe positions, the relationship between the SVG path's
-  // absolute coordinates and the wrapper was WRONG — causing arms/body to drift apart.
-  //
-  // NEW APPROACH: Use pathOffset from the Fabric object. pathOffset is the center of the 
-  // path's own coordinate system (the midpoint of its bounding box in path-local coords).
-  // Fabric stores left/top as the position of this pathOffset point on the canvas.
-  //
-  // So the correct SVG <g> translate is ALWAYS -pathOffset, regardless of which keyframe
-  // we're at. The wrapper is positioned at Fabric's left/top (which IS the pathOffset 
-  // point on canvas), and the SVG translates by -pathOffset to center the path on the
-  // wrapper. When GSAP animates left/top, the SVG moves with the wrapper perfectly.
-  //
   const renderPath = (obj, objKfs) => {
     const container = containerRef.current;
     const timeline = timelineRef.current;
@@ -157,11 +142,17 @@ const LivePreview = () => {
     const fo = fabricCanvas?.getObjects().find(o => o.id === obj.id);
     const firstKf = objKfs[0];
 
-    // FIX: Get pathOffset from the fabric object — this is the TRUE center of the path
-    // in its own coordinate system. This value is CONSTANT regardless of where the 
-    // path is positioned on the canvas.
+    // FIX: Retrieve path offset and dimensions to map custom anchor points
     const pathOffsetX = fo?.pathOffset?.x || firstKf.properties.pathOffsetX || 0;
     const pathOffsetY = fo?.pathOffset?.y || firstKf.properties.pathOffsetY || 0;
+    const width = fo?.width || firstKf.properties.width || obj.width || 0;
+    const height = fo?.height || firstKf.properties.height || obj.height || 0;
+    const anchorX = obj.anchorX ?? 0.5;
+    const anchorY = obj.anchorY ?? 0.5;
+
+    // Shift coordinates so that custom anchor points behave correctly
+    const transX = pathOffsetX + (anchorX - 0.5) * width;
+    const transY = pathOffsetY + (anchorY - 0.5) * height;
 
     const wrapper = document.createElement('div');
     wrapper.id = obj.id; wrapper.style.position = 'absolute';
@@ -173,11 +164,15 @@ const LivePreview = () => {
     // Render embedded fill images FIRST (behind strokes)
     if (obj.fills?.length > 0) {
       obj.fills.forEach(fill => {
+        // Recalculate the fill position against the adjusted wrapper anchor
+        const adjustedLeft = fill.relLeft - (anchorX - 0.5) * width;
+        const adjustedTop = fill.relTop - (anchorY - 0.5) * height;
+
         const img = document.createElement('img');
         img.src = fill.dataURL;
         img.style.position = 'absolute';
-        img.style.left = fill.relLeft + 'px';
-        img.style.top = fill.relTop + 'px';
+        img.style.left = adjustedLeft + 'px';
+        img.style.top = adjustedTop + 'px';
         img.style.width = fill.width + 'px';
         img.style.height = fill.height + 'px';
         img.style.pointerEvents = 'none';
@@ -186,16 +181,13 @@ const LivePreview = () => {
       });
     }
 
-    // SVG stroke path on top
-    // FIX: Use -pathOffset as the <g> translate. This is the correct constant offset
-    // that maps the path's absolute SVG coordinates to be centered on the wrapper div.
-    // Previously this used -firstKf.x/-firstKf.y which was only correct at keyframe 0.
+    // SVG stroke path on top using the anchor-adjusted translate
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     svg.style.position = 'absolute'; svg.style.left = '0px'; svg.style.top = '0px';
     svg.style.overflow = 'visible'; svg.style.pointerEvents = 'none';
     svg.setAttribute('width', '1'); svg.setAttribute('height', '1');
     const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-    g.setAttribute('transform', `translate(${-pathOffsetX}, ${-pathOffsetY})`);
+    g.setAttribute('transform', `translate(${-transX}, ${-transY})`);
     const pathEl = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     pathEl.setAttribute('d', fabricPathToSVGPath(obj.pathData));
     pathEl.setAttribute('stroke', obj.strokeColor || '#000000');

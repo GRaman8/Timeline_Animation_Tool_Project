@@ -1,10 +1,6 @@
 /**
  * Code Generator - Produces standalone HTML/CSS/JS animation
  * Supports: rectangles, circles, text, paths (with embedded fills), groups, canvas bg color
- * 
- * FIX: Path objects now use pathOffset for SVG <g> translate instead of keyframe x/y.
- * This ensures multi-part drawings (like stickman body + arms) stay correctly aligned
- * across all keyframes in exported code.
  */
 
 import { normalizeKeyframeRotations } from './interpolation';
@@ -156,29 +152,23 @@ document.addEventListener('DOMContentLoaded', () => {
 };
 
 // ========== PATH CREATION (with embedded fills) ==========
-//
-// FIX: The SVG <g> translate must use -pathOffset, NOT -firstKeyframe.x/y.
-//
-// WHY: The path SVG data contains absolute canvas coordinates (e.g. M 397 115).
-// Fabric stores left/top as the center of the path (pathOffset mapped to canvas).
-// So the correct transform to center the SVG on the wrapper is translate(-pathOffset).
-//
-// Previously, translate(-firstKf.x, -firstKf.y) was used. This happened to produce
-// a SIMILAR result for the first keyframe (because left/top ≈ pathOffset at that position),
-// but they're NOT the same value — left/top is the canvas position while pathOffset is the
-// path's internal center. The small difference caused drift when animating to other keyframes.
-//
-// With the fix, the <g> translate is CONSTANT (-pathOffset), and GSAP animates the wrapper's
-// left/top. Since Fabric's left/top for a path IS the pathOffset mapped to canvas coordinates,
-// moving the wrapper by the same delta as Fabric moves the path keeps everything aligned.
-//
 const generatePathCreation = (obj, firstKf, fabricCanvas) => {
   const pathString = fabricPathToSVGPath(obj.pathData);
   
-  // FIX: Get pathOffset from the fabric object
+  // Get pathOffset from the fabric object
   const fo = fabricCanvas?.getObjects().find(o => o.id === obj.id);
   const pathOffsetX = fo?.pathOffset?.x || firstKf.properties.pathOffsetX || 0;
   const pathOffsetY = fo?.pathOffset?.y || firstKf.properties.pathOffsetY || 0;
+  
+  // Support custom anchor points for paths so stickman arms rotate correctly
+  const width = fo?.width || firstKf.properties.width || obj.width || 0;
+  const height = fo?.height || firstKf.properties.height || obj.height || 0;
+  const anchorX = obj.anchorX ?? 0.5;
+  const anchorY = obj.anchorY ?? 0.5;
+  
+  // Calculate the translated center based on the custom anchor point
+  const transX = pathOffsetX + (anchorX - 0.5) * width;
+  const transY = pathOffsetY + (anchorY - 0.5) * height;
   
   const zIndex = firstKf.properties.zIndex ?? 0;
   const wrapperId = obj.id;
@@ -198,12 +188,16 @@ const generatePathCreation = (obj, firstKf, fabricCanvas) => {
   // Embedded fill images (rendered BEFORE svg so they appear behind strokes)
   if (obj.fills?.length > 0) {
     obj.fills.forEach((fill, idx) => {
+      // Offset the fill to maintain its position relative to the new anchor point
+      const adjustedLeft = fill.relLeft - (anchorX - 0.5) * width;
+      const adjustedTop = fill.relTop - (anchorY - 0.5) * height;
+      
       js += `    // Embedded fill #${idx + 1}
     var fillImg_${idx} = document.createElement('img');
     fillImg_${idx}.src = '${fill.dataURL}';
     fillImg_${idx}.style.position = 'absolute';
-    fillImg_${idx}.style.left = '${fill.relLeft.toFixed(2)}px';
-    fillImg_${idx}.style.top = '${fill.relTop.toFixed(2)}px';
+    fillImg_${idx}.style.left = '${adjustedLeft.toFixed(2)}px';
+    fillImg_${idx}.style.top = '${adjustedTop.toFixed(2)}px';
     fillImg_${idx}.style.width = '${fill.width}px';
     fillImg_${idx}.style.height = '${fill.height}px';
     fillImg_${idx}.style.pointerEvents = 'none';
@@ -213,7 +207,7 @@ const generatePathCreation = (obj, firstKf, fabricCanvas) => {
     });
   }
 
-  // FIX: Use -pathOffset for the <g> translate, not -firstKf position
+  // Use the anchor-adjusted translate
   js += `    var svg_${wrapperId} = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     svg_${wrapperId}.style.position = 'absolute';
     svg_${wrapperId}.style.left = '0px';
@@ -223,7 +217,7 @@ const generatePathCreation = (obj, firstKf, fabricCanvas) => {
     svg_${wrapperId}.setAttribute('width', '1');
     svg_${wrapperId}.setAttribute('height', '1');
     var g_${wrapperId} = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-    g_${wrapperId}.setAttribute('transform', 'translate(${(-pathOffsetX).toFixed(2)}, ${(-pathOffsetY).toFixed(2)})');
+    g_${wrapperId}.setAttribute('transform', 'translate(${(-transX).toFixed(2)}, ${(-transY).toFixed(2)})');
     var path_${wrapperId} = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     path_${wrapperId}.setAttribute('d', '${pathString}');
     path_${wrapperId}.setAttribute('stroke', '${obj.strokeColor || '#000000'}');
@@ -381,7 +375,6 @@ const generateRegularCreation = (obj, firstKf) => {
 };
 
 // ========== ANIMATION GENERATORS ==========
-
 const generatePathAnimation = (obj, objKfs) => {
   let js = '';
   for (let i = 1; i < objKfs.length; i++) {
@@ -448,7 +441,6 @@ const generateRegularAnimation = (obj, objKfs) => {
 };
 
 // ========== HELPERS ==========
-
 const mapEasingToGSAP = (easing) => {
   const map = {
     'linear': 'none', 'easeInQuad': 'power1.in', 'easeOutQuad': 'power1.out', 'easeInOutQuad': 'power1.inOut',
