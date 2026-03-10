@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Paper, Box, Typography, Chip } from '@mui/material';
 import * as fabric from 'fabric';
 
@@ -7,17 +7,19 @@ import {
   useCurrentTime, useKeyframes, useCanvasObjects, useIsPlaying,
   useHasActiveSelection, useDrawingMode, useCurrentDrawingPath,
   useDrawingToolSettings, useCanvasBgColor, useSelectedKeyframe,
-  useFillToolActive, useFillToolColor,
+  useFillToolActive, useFillToolColor, useTrackOrder,
 } from '../../store/hooks';
 
 import { 
   extractPropertiesFromFabricObject, findFabricObjectById,
   createPathFromPoints, createCompoundPathFromStrokes, ungroupFabricGroup,
+  renderRotationControl,
 } from '../../utils/fabricHelpers';
 
 import { 
   findSurroundingKeyframes, interpolateProperties, 
   applyPropertiesToFabricObject, applyZIndexOrdering,
+  findGlobalZSwapPoint,
 } from '../../utils/interpolation';
 
 import { performFloodFill } from '../../utils/floodFill';
@@ -71,6 +73,7 @@ const Canvas = () => {
   const [selectedKeyframe] = useSelectedKeyframe();
   const [fillToolActive, setFillToolActive] = useFillToolActive();
   const [fillToolColor] = useFillToolColor();
+  const [, setTrackOrder] = useTrackOrder();
   
   const [isInteracting, setIsInteracting] = useState(false);
   const interactingObjectRef = useRef(null);
@@ -85,12 +88,10 @@ const Canvas = () => {
   const canvasObjectsRef = useRef(canvasObjects);
   useEffect(() => { canvasObjectsRef.current = canvasObjects; }, [canvasObjects]);
 
-  // FIX: Fills correctly inherit parent path transforms via trigonometry locking
-  // Calculates absolute positioning if the object is inside an ActiveSelection (e.g., editing)
+  // ==================== FILL SYNC ====================
   const syncFillsForPath = (pathId) => {
     if (!fabricCanvas) return;
     
-    // Find parent object (also search inside ActiveSelection if dragging)
     let parentFo = fabricCanvas.getObjects().find(o => o.id === pathId);
     if (!parentFo) {
       const activeObj = fabricCanvas.getActiveObject();
@@ -100,14 +101,12 @@ const Canvas = () => {
     }
     if (!parentFo) return;
 
-    // Default to parent's direct transforms
     let absLeft = parentFo.left || 0;
     let absTop = parentFo.top || 0;
     let absScaleX = parentFo.scaleX || 1;
     let absScaleY = parentFo.scaleY || 1;
     let absAngle = parentFo.angle || 0;
 
-    // If grouped temporarily (ActiveSelection edit mode), extract absolute canvas coordinates
     if (parentFo.group && parentFo.group.type === 'activeSelection') {
       const matrix = parentFo.calcTransformMatrix();
       const options = fabric.util.qrDecompose(matrix);
@@ -126,7 +125,6 @@ const Canvas = () => {
         const rx = (o._relLeft || 0) * sx;
         const ry = (o._relTop || 0) * sy;
         
-        // Rotate the embedded fill offset by the absolute angle
         const tx = rx * Math.cos(rad) - ry * Math.sin(rad);
         const ty = rx * Math.sin(rad) + ry * Math.cos(rad);
         
@@ -149,6 +147,17 @@ const Canvas = () => {
     pathIds.forEach(pid => syncFillsForPath(pid));
   };
 
+  // ==================== TRACK ORDER SYNC ====================
+  const syncTrackOrderFromCanvas = useCallback(() => {
+    if (!fabricCanvas) return;
+    const objects = fabricCanvas.getObjects().filter(o => o.id && !o._isFill);
+    const newOrder = [...objects].reverse().map(o => o.id);
+    setTrackOrder(prev => {
+      if (prev.length === newOrder.length && prev.every((id, i) => id === newOrder[i])) return prev;
+      return newOrder;
+    });
+  }, [fabricCanvas, setTrackOrder]);
+
   // ==================== INIT ====================
   useEffect(() => {
     if (!canvasRef.current) return;
@@ -160,6 +169,12 @@ const Canvas = () => {
       selectionLineWidth: 2,
     });
     setFabricCanvas(canvas);
+
+    canvas.on('object:added', (e) => {
+      if (e.target && !e.target._isFill && e.target.controls?.mtr) {
+        e.target.controls.mtr.render = renderRotationControl;
+      }
+    });
 
     canvas.on('selection:created', (e) => {
       setHasActiveSelection(true);
@@ -173,27 +188,14 @@ const Canvas = () => {
     });
     canvas.on('selection:cleared', () => { setHasActiveSelection(false); setSelectedObject(null); });
     
-    // FIX: Bind all transformations directly to syncAllFills so they never detach
     canvas.on('object:moving', (e) => {
-      if (e.target) {
-        updateProps(e.target);
-        syncAllFills();
-        canvas.renderAll();
-      }
+      if (e.target) { updateProps(e.target); syncAllFills(); canvas.renderAll(); }
     });
     canvas.on('object:scaling', (e) => { 
-      if (e.target) {
-        updateProps(e.target);
-        syncAllFills();
-        canvas.renderAll();
-      }
+      if (e.target) { updateProps(e.target); syncAllFills(); canvas.renderAll(); }
     });
     canvas.on('object:rotating', (e) => { 
-      if (e.target) {
-        updateProps(e.target);
-        syncAllFills();
-        canvas.renderAll();
-      }
+      if (e.target) { updateProps(e.target); syncAllFills(); canvas.renderAll(); }
     });
     canvas.on('object:modified', (e) => {
       if (e.target) {
@@ -205,8 +207,7 @@ const Canvas = () => {
               pathOffsetX: e.target.pathOffset?.x || 0, pathOffsetY: e.target.pathOffset?.y || 0,
             } : obj));
         }
-        syncAllFills();
-        canvas.renderAll();
+        syncAllFills(); canvas.renderAll();
       }
     });
     canvas.on('mouse:down', (e) => { if (e.target) { setIsInteracting(true); interactingObjectRef.current = e.target.id; } });
@@ -235,10 +236,10 @@ const Canvas = () => {
     fabricCanvas.renderAll();
   }, [canvasBgColor, fabricCanvas]);
 
+  // ==================== SELECTED KEYFRAME ====================
   useEffect(() => {
     if (!fabricCanvas || !selectedKeyframe || isPlaying || isInteracting || drawingMode || fillToolActive) return;
     
-    // FIX: Clear ActiveSelection safely so keyframe scrubbing doesn't corrupt object positions
     if (fabricCanvas.getActiveObject()?.type === 'activeSelection') {
         fabricCanvas.discardActiveObject();
     }
@@ -249,10 +250,14 @@ const Canvas = () => {
     const kf = objKfs[index];
     const targetTime = kf.time;
     
+    // Compute global z-swap point ONCE for this time, so all objects swap together
+    const globalZSwap = findGlobalZSwapPoint(keyframes, targetTime);
+
     const fo = findFabricObjectById(fabricCanvas, objectId);
     if (fo && kf.properties) {
       fo.set({ left: kf.properties.x, top: kf.properties.y, scaleX: kf.properties.scaleX,
         scaleY: kf.properties.scaleY, angle: kf.properties.rotation, opacity: kf.properties.opacity });
+      fo._targetZIndex = kf.properties.zIndex ?? 0;
       fo.setCoords();
       fabricCanvas.setActiveObject(fo);
     }
@@ -268,7 +273,7 @@ const Canvas = () => {
       if (before && after) {
         let easingType = 'linear';
         if (before !== after) easingType = after.easing || 'linear';
-        const interpolated = interpolateProperties(before, after, targetTime, easingType);
+        const interpolated = interpolateProperties(before, after, targetTime, easingType, globalZSwap);
         if (interpolated) {
           applyPropertiesToFabricObject(otherFo, interpolated);
           otherFo.setCoords();
@@ -276,11 +281,13 @@ const Canvas = () => {
       }
     });
     
+    applyZIndexOrdering(fabricCanvas);
+    syncTrackOrderFromCanvas();
     syncAllFills();
     fabricCanvas.renderAll();
     const props = extractPropertiesFromFabricObject(fo);
     if (props) setSelectedObjectProperties(props);
-  }, [selectedKeyframe, fabricCanvas, keyframes, isPlaying, drawingMode, fillToolActive, canvasObjects]);
+  }, [selectedKeyframe, fabricCanvas, keyframes, isPlaying, drawingMode, fillToolActive, canvasObjects, syncTrackOrderFromCanvas]);
 
   // ==================== PAINT BUCKET (FLOOD FILL) TOOL ====================
   useEffect(() => {
@@ -487,6 +494,7 @@ const Canvas = () => {
     };
   }, [fabricCanvas, drawingMode, drawingSettings, canvasObjects, setCanvasObjects, setKeyframes, setDrawingMode]);
 
+  // ==================== MAIN RENDER LOOP (playback + scrubbing) ====================
   useEffect(() => {
     if (!fabricCanvas || isInteracting) return;
     fabricCanvas.forEachObject(obj => {
@@ -501,6 +509,9 @@ const Canvas = () => {
           fabricCanvas.discardActiveObject();
       }
 
+      // Compute the global z-swap point ONCE for this frame so all objects swap together
+      const globalZSwap = findGlobalZSwapPoint(keyframes, currentTime);
+
       canvasObjects.forEach(obj => {
         const objKfs = keyframes[obj.id] || [];
         if (objKfs.length === 0) return;
@@ -509,7 +520,7 @@ const Canvas = () => {
         const { before, after } = findSurroundingKeyframes(objKfs, currentTime);
         let easingType = 'linear';
         if (before && after && before !== after) easingType = after.easing || 'linear';
-        const interpolated = interpolateProperties(before, after, currentTime, easingType);
+        const interpolated = interpolateProperties(before, after, currentTime, easingType, globalZSwap);
         if (interpolated) {
             applyPropertiesToFabricObject(fo, interpolated);
             fo.setCoords();
@@ -517,12 +528,13 @@ const Canvas = () => {
       });
       applyZIndexOrdering(fabricCanvas);
     }
-    // FIX: Always sync fills so they follow parent paths during scrubbing/editing,
-    // not just during playback. This ensures painted fills (e.g., red stickman head)
-    // stay attached when moving objects to set up new keyframes.
     syncAllFills();
     fabricCanvas.renderAll();
-  }, [currentTime, keyframes, canvasObjects, fabricCanvas, isInteracting, selectedObject, isPlaying, drawingMode, fillToolActive]);
+
+    if (isPlaying) {
+      syncTrackOrderFromCanvas();
+    }
+  }, [currentTime, keyframes, canvasObjects, fabricCanvas, isInteracting, selectedObject, isPlaying, drawingMode, fillToolActive, syncTrackOrderFromCanvas]);
 
   useEffect(() => {
     if (!fabricCanvas || isInteracting) return;

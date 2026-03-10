@@ -174,3 +174,11 @@ export const fillToolColorState = atom({
   key: 'fillToolColorState',
   default: '#ff0000',
 });
+
+// Hidden tracks — plain object { [objectId]: true }
+// Tracks marked as hidden are collapsed into a dropdown menu in the timeline.
+// The selected track is always auto-shown regardless of this state.
+export const hiddenTracksState = atom({
+  key: 'hiddenTracksState',
+  default: {},
+});

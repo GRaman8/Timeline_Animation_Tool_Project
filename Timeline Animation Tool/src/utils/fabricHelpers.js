@@ -1,6 +1,36 @@
 import * as fabric from 'fabric';
 
 /**
+ * Custom render function for the rotation (mtr) control.
+ * Draws a distinct orange circle so it's visually different from the blue square resize handles.
+ */
+export const renderRotationControl = (ctx, left, top, styleOverride, fabricObject) => {
+  const size = fabricObject.cornerSize || 13;
+  ctx.save();
+  ctx.translate(left, top);
+
+  // Outer circle — orange fill
+  ctx.beginPath();
+  ctx.arc(0, 0, size / 2 + 1, 0, Math.PI * 2);
+  ctx.fillStyle = '#ff6b00';
+  ctx.fill();
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Small curved arrow hint inside the circle
+  const r = size / 4;
+  ctx.beginPath();
+  ctx.arc(0, 0, r, -Math.PI * 0.75, Math.PI * 0.55);
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 1.5;
+  ctx.lineCap = 'round';
+  ctx.stroke();
+
+  ctx.restore();
+};
+
+/**
  * Create a new Fabric.js object based on type.
  * ALL objects use originX:'center', originY:'center' so left/top = center.
  * Now accepts optional fill color.
@@ -262,6 +292,7 @@ export const ungroupFabricGroup = (fabricCanvas, group) => {
 
 /**
  * Change the anchor/pivot point of a Fabric.js object.
+ * Uses renderRotationControl to keep the rotation handle visually distinct.
  */
 export const changeAnchorPoint = (fabricObject, anchorX, anchorY) => {
   if (!fabricObject) return;
@@ -284,6 +315,7 @@ export const changeAnchorPoint = (fabricObject, anchorX, anchorY) => {
       cursorStyleHandler: existingMtr?.cursorStyleHandler,
       actionHandler: existingMtr?.actionHandler,
       actionName: 'rotate', withConnection: true,
+      render: renderRotationControl,
     });
   } else {
     fabricObject.centeredRotation = false;
@@ -293,6 +325,7 @@ export const changeAnchorPoint = (fabricObject, anchorX, anchorY) => {
       cursorStyleHandler: existingMtr?.cursorStyleHandler,
       actionHandler: existingMtr?.actionHandler,
       actionName: 'rotate', withConnection: true,
+      render: renderRotationControl,
     });
   }
   

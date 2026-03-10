@@ -2,7 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import { Box, Paper, Typography } from '@mui/material';
 import gsap from 'gsap';
 import { useCanvasObjects, useKeyframes, useDuration, useFabricCanvas, useCanvasBgColor } from '../../store/hooks';
-import { normalizeKeyframeRotations } from '../../utils/interpolation';
+import { normalizeKeyframeRotations, findSurroundingKeyframes } from '../../utils/interpolation';
 import { CANVAS_WIDTH, CANVAS_HEIGHT } from '../Canvas/Canvas';
 
 const fabricPathToSVGPath = (pathArray) => {
@@ -18,6 +18,48 @@ const getDefaultFillColor = (type) => {
     case 'circle': return '#ef4444';
     case 'text': return '#000000';
     default: return '#000000';
+  }
+};
+
+/**
+ * Find the global z-swap point for a specific time segment (prev.time → curr.time)
+ * by scanning ALL objects' normalized keyframes. If any object whose z-index changes
+ * in an overlapping segment has a custom zSwapPoint, that value is used for everyone.
+ */
+const findGlobalZSwapForSegment = (allNormalizedKfs, prevTime, currTime) => {
+  const midTime = (prevTime + currTime) / 2;
+  let globalSwap = null;
+
+  for (const [objId, objKfs] of Object.entries(allNormalizedKfs)) {
+    if (!objKfs || objKfs.length < 2) continue;
+    const { before, after } = findSurroundingKeyframes(objKfs, midTime);
+    if (!before || !after || before === after) continue;
+
+    const beforeZ = before.properties.zIndex ?? 0;
+    const afterZ = after.properties.zIndex ?? 0;
+    if (beforeZ === afterZ) continue;
+
+    if (after.zSwapPoint !== undefined && after.zSwapPoint !== null) {
+      if (globalSwap === null) {
+        globalSwap = after.zSwapPoint;
+      } else {
+        globalSwap = Math.min(globalSwap, after.zSwapPoint);
+      }
+    }
+  }
+  return globalSwap ?? 0.5;
+};
+
+/**
+ * Adds a discrete z-index set at the global swap point between two keyframes.
+ * Only adds a tween if z-index actually changes.
+ */
+const addZSwapTween = (timeline, element, prev, curr, globalSwapPoint) => {
+  const prevZ = prev.properties.zIndex ?? 0;
+  const currZ = curr.properties.zIndex ?? 0;
+  if (prevZ !== currZ) {
+    const swapTime = prev.time + (curr.time - prev.time) * globalSwapPoint;
+    timeline.set(element, { zIndex: currZ }, swapTime);
   }
 };
 
@@ -41,23 +83,30 @@ const LivePreview = () => {
       if (obj.type === 'group' && obj.children) obj.children.forEach(childId => groupChildren.add(childId));
     });
 
+    // Pre-compute all normalized keyframes for global swap point lookups
+    const allNormalizedKfs = {};
     canvasObjects.forEach(obj => {
+      if (groupChildren.has(obj.id)) return;
       const rawKfs = keyframes[obj.id] || [];
       if (rawKfs.length === 0) return;
+      allNormalizedKfs[obj.id] = normalizeKeyframeRotations(rawKfs);
+    });
+
+    canvasObjects.forEach(obj => {
       if (groupChildren.has(obj.id)) return;
+      const objKfs = allNormalizedKfs[obj.id];
+      if (!objKfs || objKfs.length === 0) return;
 
-      const objKfs = normalizeKeyframeRotations(rawKfs);
-
-      if (obj.type === 'group') renderGroup(obj, objKfs);
-      else if (obj.type === 'path') renderPath(obj, objKfs);
-      else renderRegular(obj, objKfs);
+      if (obj.type === 'group') renderGroup(obj, objKfs, allNormalizedKfs);
+      else if (obj.type === 'path') renderPath(obj, objKfs, allNormalizedKfs);
+      else renderRegular(obj, objKfs, allNormalizedKfs);
     });
 
     return () => { if (timelineRef.current) timelineRef.current.kill(); };
   }, [canvasObjects, keyframes, duration, fabricCanvas, canvasBgColor]);
 
   // ===== GROUP =====
-  const renderGroup = (obj, objKfs) => {
+  const renderGroup = (obj, objKfs, allNormalizedKfs) => {
     const container = containerRef.current;
     const timeline = timelineRef.current;
     const fabricGroup = fabricCanvas?.getObjects().find(o => o.id === obj.id);
@@ -85,12 +134,14 @@ const LivePreview = () => {
     }
     for (let i = 1; i < objKfs.length; i++) {
       const prev = objKfs[i - 1], curr = objKfs[i];
+      const globalSwap = findGlobalZSwapForSegment(allNormalizedKfs, prev.time, curr.time);
       timeline.to(groupEl, {
         duration: curr.time - prev.time, left: curr.properties.x + 'px', top: curr.properties.y + 'px',
         scaleX: curr.properties.scaleX, scaleY: curr.properties.scaleY,
         rotation: curr.properties.rotation, opacity: curr.properties.opacity,
-        zIndex: curr.properties.zIndex ?? 0, ease: curr.easing || 'none',
+        ease: curr.easing || 'none',
       }, prev.time);
+      addZSwapTween(timeline, groupEl, prev, curr, globalSwap);
     }
   };
 
@@ -135,14 +186,13 @@ const LivePreview = () => {
   };
 
   // ===== STANDALONE PATH (with embedded fills) =====
-  const renderPath = (obj, objKfs) => {
+  const renderPath = (obj, objKfs, allNormalizedKfs) => {
     const container = containerRef.current;
     const timeline = timelineRef.current;
     if (objKfs.length === 0) return;
     const fo = fabricCanvas?.getObjects().find(o => o.id === obj.id);
     const firstKf = objKfs[0];
 
-    // FIX: Retrieve path offset and dimensions to map custom anchor points
     const pathOffsetX = fo?.pathOffset?.x || firstKf.properties.pathOffsetX || 0;
     const pathOffsetY = fo?.pathOffset?.y || firstKf.properties.pathOffsetY || 0;
     const width = fo?.width || firstKf.properties.width || obj.width || 0;
@@ -150,7 +200,6 @@ const LivePreview = () => {
     const anchorX = obj.anchorX ?? 0.5;
     const anchorY = obj.anchorY ?? 0.5;
 
-    // Shift coordinates so that custom anchor points behave correctly
     const transX = pathOffsetX + (anchorX - 0.5) * width;
     const transY = pathOffsetY + (anchorY - 0.5) * height;
 
@@ -161,10 +210,8 @@ const LivePreview = () => {
     wrapper.style.transformOrigin = '0px 0px';
     wrapper.style.zIndex = (firstKf.properties.zIndex ?? 0).toString();
 
-    // Render embedded fill images FIRST (behind strokes)
     if (obj.fills?.length > 0) {
       obj.fills.forEach(fill => {
-        // Recalculate the fill position against the adjusted wrapper anchor
         const adjustedLeft = fill.relLeft - (anchorX - 0.5) * width;
         const adjustedTop = fill.relTop - (anchorY - 0.5) * height;
 
@@ -181,7 +228,6 @@ const LivePreview = () => {
       });
     }
 
-    // SVG stroke path on top using the anchor-adjusted translate
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     svg.style.position = 'absolute'; svg.style.left = '0px'; svg.style.top = '0px';
     svg.style.overflow = 'visible'; svg.style.pointerEvents = 'none';
@@ -199,17 +245,19 @@ const LivePreview = () => {
       rotation: firstKf.properties.rotation, opacity: firstKf.properties.opacity });
     for (let i = 1; i < objKfs.length; i++) {
       const prev = objKfs[i - 1], curr = objKfs[i];
+      const globalSwap = findGlobalZSwapForSegment(allNormalizedKfs, prev.time, curr.time);
       timeline.to(wrapper, {
         duration: curr.time - prev.time, left: curr.properties.x + 'px', top: curr.properties.y + 'px',
         scaleX: curr.properties.scaleX, scaleY: curr.properties.scaleY,
         rotation: curr.properties.rotation, opacity: curr.properties.opacity,
-        zIndex: curr.properties.zIndex ?? 0, ease: curr.easing || 'none',
+        ease: curr.easing || 'none',
       }, prev.time);
+      addZSwapTween(timeline, wrapper, prev, curr, globalSwap);
     }
   };
 
   // ===== REGULAR (rect, circle, text) =====
-  const renderRegular = (obj, objKfs) => {
+  const renderRegular = (obj, objKfs, allNormalizedKfs) => {
     const container = containerRef.current;
     const timeline = timelineRef.current;
     if (objKfs.length === 0) return;
@@ -234,13 +282,15 @@ const LivePreview = () => {
       rotation: firstKf.properties.rotation, opacity: firstKf.properties.opacity });
     for (let i = 1; i < objKfs.length; i++) {
       const prev = objKfs[i - 1], curr = objKfs[i];
+      const globalSwap = findGlobalZSwapForSegment(allNormalizedKfs, prev.time, curr.time);
       timeline.to(el, {
         duration: curr.time - prev.time,
         left: (curr.properties.x - anchorX * ew) + 'px', top: (curr.properties.y - anchorY * eh) + 'px',
         scaleX: curr.properties.scaleX, scaleY: curr.properties.scaleY,
         rotation: curr.properties.rotation, opacity: curr.properties.opacity,
-        zIndex: curr.properties.zIndex ?? 0, ease: curr.easing || 'none',
+        ease: curr.easing || 'none',
       }, prev.time);
+      addZSwapTween(timeline, el, prev, curr, globalSwap);
     }
   };
 

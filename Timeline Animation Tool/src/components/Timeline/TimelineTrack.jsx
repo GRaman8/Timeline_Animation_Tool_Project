@@ -1,9 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { 
-  Box, Typography, Paper, IconButton, Menu, MenuItem, TextField, Tooltip 
+  Box, Typography, Paper, IconButton, Menu, MenuItem, TextField, Tooltip, Divider,
 } from '@mui/material';
 import { 
-  Delete, Lock, LockOpen, DragIndicator 
+  Delete, Lock, LockOpen, DragIndicator, VisibilityOff,
 } from '@mui/icons-material';
 import { 
   useSelectedObject, 
@@ -14,9 +14,18 @@ import {
   useLockedTracks,
   useCanvasObjects,
   useFabricCanvas,
+  useHiddenTracks,
 } from '../../store/hooks';
 import { EASING_OPTIONS } from '../../utils/easing';
 import { findFabricObjectById } from '../../utils/fabricHelpers';
+
+const Z_SWAP_OPTIONS = [
+  { value: 0,    label: 'At Start (0%)' },
+  { value: 0.25, label: 'At 25%' },
+  { value: 0.5,  label: 'At Middle (50%) — default' },
+  { value: 0.75, label: 'At 75%' },
+  { value: 1,    label: 'At End (100%)' },
+];
 
 const TimelineTrack = ({ 
   object, 
@@ -38,6 +47,7 @@ const TimelineTrack = ({
   const [lockedTracks, setLockedTracks] = useLockedTracks();
   const [canvasObjects, setCanvasObjects] = useCanvasObjects();
   const [fabricCanvas] = useFabricCanvas();
+  const [, setHiddenTracks] = useHiddenTracks();
   
   const [anchorEl, setAnchorEl] = React.useState(null);
   const [contextKfIndex, setContextKfIndex] = React.useState(null);
@@ -45,11 +55,9 @@ const TimelineTrack = ({
   const [renameValue, setRenameValue] = useState(object?.name || '');
   const renameInputRef = useRef(null);
 
-  // Defensive guard — if object is undefined (race condition during add/remove), skip render
   if (!object) return null;
   
   const isSelected = selectedObject === object.id;
-  // FIX: Use plain object lookup, not Set.has()
   const isLocked = !!lockedTracks[object.id];
 
   useEffect(() => {
@@ -65,6 +73,11 @@ const TimelineTrack = ({
            selectedKeyframe.index === idx;
   };
 
+  // Current z-swap point for the context menu highlight
+  const currentZSwapPoint = contextKfIndex !== null 
+    ? (objectKeyframes[contextKfIndex]?.zSwapPoint ?? 0.5) 
+    : 0.5;
+
   // ===== KEYFRAME CLICK =====
   const handleKeyframeClick = (index, event) => {
     event.stopPropagation();
@@ -76,7 +89,6 @@ const TimelineTrack = ({
     setCurrentTime(kf.time);
     setSelectedKeyframe({ objectId: object.id, index });
     
-    // Apply keyframe properties to fabric object for visual feedback
     if (fabricCanvas) {
       const fabricObject = findFabricObjectById(fabricCanvas, object.id);
       if (fabricObject && kf.properties) {
@@ -136,6 +148,20 @@ const TimelineTrack = ({
     handleCloseMenu();
   };
 
+  const handleChangeZSwapPoint = (value) => {
+    if (contextKfIndex === null) return;
+    setKeyframes(prev => {
+      const updated = { ...prev };
+      updated[object.id] = [...updated[object.id]];
+      updated[object.id][contextKfIndex] = {
+        ...updated[object.id][contextKfIndex],
+        zSwapPoint: value,
+      };
+      return updated;
+    });
+    handleCloseMenu();
+  };
+
   // ===== TRACK CLICK =====
   const handleTrackClick = () => {
     if (isLocked) return;
@@ -144,7 +170,6 @@ const TimelineTrack = ({
   };
 
   // ===== LOCK TOGGLE =====
-  // FIX: Use plain object spread, not Set mutation
   const handleToggleLock = (e) => {
     e.stopPropagation();
     setLockedTracks(prev => {
@@ -156,6 +181,12 @@ const TimelineTrack = ({
       }
       return next;
     });
+  };
+
+  // ===== HIDE TRACK =====
+  const handleHideTrack = (e) => {
+    e.stopPropagation();
+    setHiddenTracks(prev => ({ ...prev, [object.id]: true }));
   };
 
   // ===== RENAME =====
@@ -261,13 +292,20 @@ const TimelineTrack = ({
           </IconButton>
         </Tooltip>
 
+        {/* Hide Track Toggle */}
+        <Tooltip title="Hide track from timeline">
+          <IconButton size="small" onClick={handleHideTrack} sx={{ p: 0.25 }}>
+            <VisibilityOff fontSize="small" sx={{ color: 'text.disabled', fontSize: '16px' }} />
+          </IconButton>
+        </Tooltip>
+
         {/* Type Icon + Name */}
         <Box sx={{ 
           display: 'flex', 
           alignItems: 'center', 
           gap: 0.5, 
-          minWidth: 110, 
-          maxWidth: 130 
+          minWidth: 100, 
+          maxWidth: 120 
         }}>
           <Typography variant="caption" sx={{ fontSize: '10px', opacity: 0.6 }}>
             {getTypeIcon()}
@@ -326,6 +364,7 @@ const TimelineTrack = ({
             const isKfSelected = isKeyframeSelected(idx);
             const isAtScrubber = Math.abs(currentTime - kf.time) < 0.05;
             const hasEasing = kf.easing && kf.easing !== 'linear';
+            const hasCustomZSwap = kf.zSwapPoint !== undefined && kf.zSwapPoint !== 0.5;
             
             let kfColor = 'primary.main';
             if (isKfSelected) {
@@ -339,7 +378,7 @@ const TimelineTrack = ({
             return (
               <Tooltip 
                 key={idx} 
-                title={`${kf.time.toFixed(2)}s${hasEasing ? ` (${kf.easing})` : ''}`}
+                title={`${kf.time.toFixed(2)}s${hasEasing ? ` (${kf.easing})` : ''}${hasCustomZSwap ? ` • z-swap ${(kf.zSwapPoint * 100).toFixed(0)}%` : ''}`}
                 placement="top"
               >
                 <Box
@@ -355,7 +394,9 @@ const TimelineTrack = ({
                     bgcolor: kfColor,
                     border: isKfSelected 
                       ? '2px solid #e65100' 
-                      : '2px solid white',
+                      : hasCustomZSwap
+                        ? '2px solid #ff6b00'
+                        : '2px solid white',
                     borderRadius: isKfSelected ? '2px' : '1px',
                     cursor: isLocked ? 'default' : 'pointer',
                     transition: 'all 0.15s',
@@ -407,6 +448,13 @@ const TimelineTrack = ({
           <Delete fontSize="small" sx={{ mr: 1 }} />
           Delete Keyframe
         </MenuItem>
+
+        <Divider />
+        <MenuItem disabled sx={{ opacity: '1 !important' }}>
+          <Typography variant="caption" fontWeight={700} color="text.secondary">
+            Easing
+          </Typography>
+        </MenuItem>
         {EASING_OPTIONS.map(option => (
           <MenuItem 
             key={option.value}
@@ -416,6 +464,28 @@ const TimelineTrack = ({
             {option.label}
           </MenuItem>
         ))}
+
+        {/* Z-Order Swap Point — only show for keyframes after the first */}
+        {contextKfIndex !== null && contextKfIndex > 0 && (
+          <>
+            <Divider />
+            <MenuItem disabled sx={{ opacity: '1 !important' }}>
+              <Typography variant="caption" fontWeight={700} color="text.secondary">
+                Z-Order Swap Point
+              </Typography>
+            </MenuItem>
+            {Z_SWAP_OPTIONS.map(option => (
+              <MenuItem
+                key={option.value}
+                onClick={() => handleChangeZSwapPoint(option.value)}
+                selected={Math.abs(currentZSwapPoint - option.value) < 0.01}
+                sx={{ fontSize: '0.85rem' }}
+              >
+                {option.label}
+              </MenuItem>
+            ))}
+          </>
+        )}
       </Menu>
     </Paper>
   );

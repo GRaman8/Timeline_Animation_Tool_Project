@@ -1,11 +1,18 @@
 import React, { useEffect, useCallback, useRef, useState } from 'react';
-import { Paper, Typography, Box, Tooltip, IconButton } from '@mui/material';
-import { Sync as SyncIcon } from '@mui/icons-material';
+import { Paper, Typography, Box, Tooltip, IconButton, Menu, MenuItem, Badge, Divider } from '@mui/material';
+import { 
+  Sync as SyncIcon,
+  MoreVert as MoreVertIcon,
+  Visibility as VisibilityIcon,
+  VisibilityOff as VisibilityOffIcon,
+} from '@mui/icons-material';
 import { 
   useCanvasObjects, 
   useKeyframes, 
   useTrackOrder, 
-  useFabricCanvas 
+  useFabricCanvas,
+  useHiddenTracks,
+  useSelectedObject,
 } from '../../store/hooks';
 import PlaybackControls from './PlaybackControls';
 import TimelineScrubber from './TimelineScrubber';
@@ -16,19 +23,22 @@ const Timeline = () => {
   const [keyframes] = useKeyframes();
   const [trackOrder, setTrackOrder] = useTrackOrder();
   const [fabricCanvas] = useFabricCanvas();
+  const [hiddenTracks, setHiddenTracks] = useHiddenTracks();
+  const [selectedObject] = useSelectedObject();
   
   // Drag state
   const [draggedId, setDraggedId] = useState(null);
   const [dragOverId, setDragOverId] = useState(null);
-  const [dragOverPosition, setDragOverPosition] = useState(null); // 'above' or 'below'
+  const [dragOverPosition, setDragOverPosition] = useState(null);
+
+  // Hidden tracks dropdown anchor
+  const [hiddenMenuAnchor, setHiddenMenuAnchor] = useState(null);
 
   // Sync trackOrder when canvasObjects change (add/remove objects)
   useEffect(() => {
     setTrackOrder(prev => {
       const existingIds = new Set(canvasObjects.map(o => o.id));
-      // Remove IDs no longer in canvas
       const filtered = prev.filter(id => existingIds.has(id));
-      // Add new IDs not yet in order (at the top = front)
       const inOrder = new Set(filtered);
       const newIds = canvasObjects
         .filter(o => !inOrder.has(o.id))
@@ -38,6 +48,29 @@ const Timeline = () => {
     });
   }, [canvasObjects, setTrackOrder]);
 
+  // Clean up hiddenTracks when objects are removed
+  useEffect(() => {
+    const existingIds = new Set(canvasObjects.map(o => o.id));
+    setHiddenTracks(prev => {
+      const hasStale = Object.keys(prev).some(id => !existingIds.has(id));
+      if (!hasStale) return prev;
+      const next = {};
+      Object.keys(prev).forEach(id => { if (existingIds.has(id)) next[id] = true; });
+      return next;
+    });
+  }, [canvasObjects, setHiddenTracks]);
+
+  // Auto-show the selected track if it's currently hidden
+  useEffect(() => {
+    if (selectedObject && hiddenTracks[selectedObject]) {
+      setHiddenTracks(prev => {
+        const next = { ...prev };
+        delete next[selectedObject];
+        return next;
+      });
+    }
+  }, [selectedObject, hiddenTracks, setHiddenTracks]);
+
   // Get ordered objects based on trackOrder
   const orderedObjects = React.useMemo(() => {
     if (trackOrder.length === 0) return canvasObjects;
@@ -46,13 +79,16 @@ const Timeline = () => {
     const ordered = trackOrder
       .map(id => objMap[id])
       .filter(Boolean);
-    // Append any objects not in trackOrder
     const inOrder = new Set(trackOrder);
     canvasObjects.forEach(obj => {
       if (!inOrder.has(obj.id)) ordered.push(obj);
     });
     return ordered;
   }, [canvasObjects, trackOrder]);
+
+  // Split into visible and hidden
+  const visibleObjects = orderedObjects.filter(obj => !hiddenTracks[obj.id]);
+  const hiddenObjects = orderedObjects.filter(obj => hiddenTracks[obj.id]);
 
   // === DRAG & DROP HANDLERS ===
   const handleDragStart = useCallback((objectId) => {
@@ -65,7 +101,6 @@ const Timeline = () => {
       setDragOverId(null);
       return;
     }
-    // Determine if cursor is in upper or lower half of the track
     const rect = e.currentTarget.getBoundingClientRect();
     const midY = rect.top + rect.height / 2;
     const position = e.clientY < midY ? 'above' : 'below';
@@ -85,22 +120,14 @@ const Timeline = () => {
       const order = [...prev];
       const fromIndex = order.indexOf(draggedId);
       if (fromIndex < 0) return prev;
-      
-      // Remove from current position
       order.splice(fromIndex, 1);
-      
-      // Find target position
       let toIndex = order.indexOf(targetId);
       if (toIndex < 0) return prev;
-      
-      // Insert above or below target
       if (dragOverPosition === 'below') toIndex += 1;
       order.splice(toIndex, 0, draggedId);
-      
       return order;
     });
 
-    // Also update canvas z-ordering to match new track order
     if (fabricCanvas) {
       setTimeout(() => {
         syncCanvasZOrderToTrackOrder();
@@ -118,15 +145,9 @@ const Timeline = () => {
     setDragOverPosition(null);
   }, []);
 
-  // Sync canvas z-order to match track order (top track = front)
   const syncCanvasZOrderToTrackOrder = useCallback(() => {
     if (!fabricCanvas) return;
-    
-    // Track order: first item = front (highest z), last = back (lowest z)
-    // Canvas: last object in array = on top
-    // So we need to bring objects to front in reverse track order
     const reversedOrder = [...trackOrder].reverse();
-    
     reversedOrder.forEach(id => {
       const obj = fabricCanvas.getObjects().find(o => o.id === id);
       if (obj) {
@@ -137,21 +158,46 @@ const Timeline = () => {
         } catch (e) {}
       }
     });
-    
     fabricCanvas.renderAll();
   }, [fabricCanvas, trackOrder]);
 
-  // Button to manually sync track order from current canvas z-order
   const syncTrackOrderFromCanvas = useCallback(() => {
     if (!fabricCanvas) return;
     const objects = fabricCanvas.getObjects();
-    // Canvas: last in array = front. Track: first = front
     const newOrder = [...objects]
       .filter(obj => obj.id)
       .reverse()
       .map(obj => obj.id);
     setTrackOrder(newOrder);
   }, [fabricCanvas, setTrackOrder]);
+
+  // Show a hidden track (restore from dropdown)
+  const handleShowTrack = (objectId) => {
+    setHiddenTracks(prev => {
+      const next = { ...prev };
+      delete next[objectId];
+      return next;
+    });
+    setHiddenMenuAnchor(null);
+  };
+
+  // Show all hidden tracks at once
+  const handleShowAllTracks = () => {
+    setHiddenTracks({});
+    setHiddenMenuAnchor(null);
+  };
+
+  // Get type icon for the dropdown
+  const getTypeIcon = (type) => {
+    switch (type) {
+      case 'rectangle': return '▬';
+      case 'circle': return '●';
+      case 'text': return 'T';
+      case 'path': return '✎';
+      case 'group': return '⊞';
+      default: return '•';
+    }
+  };
 
   return (
     <Paper sx={{ p: 2 }}>
@@ -164,13 +210,28 @@ const Timeline = () => {
             <SyncIcon fontSize="small" />
           </IconButton>
         </Tooltip>
+
+        {/* Hidden tracks dropdown button — Chrome three-dot style */}
+        {hiddenObjects.length > 0 && (
+          <Tooltip title={`${hiddenObjects.length} hidden track${hiddenObjects.length !== 1 ? 's' : ''} — click to manage`}>
+            <IconButton 
+              size="small" 
+              onClick={(e) => setHiddenMenuAnchor(e.currentTarget)}
+              sx={{ ml: 'auto' }}
+            >
+              <Badge badgeContent={hiddenObjects.length} color="primary" max={99}>
+                <MoreVertIcon fontSize="small" />
+              </Badge>
+            </IconButton>
+          </Tooltip>
+        )}
       </Box>
       
       <PlaybackControls />
       <TimelineScrubber />
       
       <Box sx={{ maxHeight: 300, overflowY: 'auto' }}>
-        {orderedObjects.length === 0 ? (
+        {visibleObjects.length === 0 && hiddenObjects.length === 0 ? (
           <Box sx={{ 
             textAlign: 'center', 
             py: 4, 
@@ -180,8 +241,21 @@ const Timeline = () => {
               Add elements to the stage to see timeline tracks
             </Typography>
           </Box>
+        ) : visibleObjects.length === 0 && hiddenObjects.length > 0 ? (
+          <Box sx={{ 
+            textAlign: 'center', 
+            py: 3, 
+            color: 'text.secondary' 
+          }}>
+            <Typography variant="body2">
+              All tracks are hidden.
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              Click the <MoreVertIcon sx={{ fontSize: 14, verticalAlign: 'middle' }} /> button above to show them.
+            </Typography>
+          </Box>
         ) : (
-          orderedObjects.map((obj, index) => (
+          visibleObjects.map((obj, index) => (
             <TimelineTrack
               key={obj.id}
               object={obj}
@@ -198,6 +272,61 @@ const Timeline = () => {
           ))
         )}
       </Box>
+
+      {/* ===== HIDDEN TRACKS DROPDOWN MENU ===== */}
+      <Menu
+        anchorEl={hiddenMenuAnchor}
+        open={Boolean(hiddenMenuAnchor)}
+        onClose={() => setHiddenMenuAnchor(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+        slotProps={{
+          paper: {
+            sx: { minWidth: 220, maxHeight: 400 }
+          }
+        }}
+      >
+        <MenuItem disabled sx={{ opacity: '1 !important' }}>
+          <Typography variant="caption" fontWeight={700} color="text.secondary">
+            Hidden Tracks ({hiddenObjects.length})
+          </Typography>
+        </MenuItem>
+        <Divider />
+
+        {hiddenObjects.map(obj => {
+          const objKfs = keyframes[obj.id] || [];
+          return (
+            <MenuItem 
+              key={obj.id} 
+              onClick={() => handleShowTrack(obj.id)}
+              sx={{ py: 0.75 }}
+            >
+              <VisibilityOffIcon fontSize="small" sx={{ mr: 1.5, color: 'text.disabled' }} />
+              <Typography variant="caption" sx={{ mr: 0.75, opacity: 0.5, fontSize: '10px' }}>
+                {getTypeIcon(obj.type)}
+              </Typography>
+              <Typography variant="body2" sx={{ flex: 1 }}>
+                {obj.name}
+              </Typography>
+              <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>
+                {objKfs.length} kf
+              </Typography>
+            </MenuItem>
+          );
+        })}
+
+        {hiddenObjects.length > 1 && (
+          <>
+            <Divider />
+            <MenuItem onClick={handleShowAllTracks}>
+              <VisibilityIcon fontSize="small" sx={{ mr: 1.5, color: 'primary.main' }} />
+              <Typography variant="body2" color="primary.main" fontWeight={600}>
+                Show All Tracks
+              </Typography>
+            </MenuItem>
+          </>
+        )}
+      </Menu>
     </Paper>
   );
 };

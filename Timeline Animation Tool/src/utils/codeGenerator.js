@@ -1,9 +1,10 @@
 /**
  * Code Generator - Produces standalone HTML/CSS/JS animation
  * Supports: rectangles, circles, text, paths (with embedded fills), groups, canvas bg color
+ * Z-index changes use a global swap point computed across all objects per time segment.
  */
 
-import { normalizeKeyframeRotations } from './interpolation';
+import { normalizeKeyframeRotations, findSurroundingKeyframes } from './interpolation';
 
 const CANVAS_WIDTH = 1400;
 const CANVAS_HEIGHT = 800;
@@ -13,6 +14,34 @@ const fabricPathToSVGPath = (pathArray) => {
   let s = '';
   pathArray.forEach(seg => { if (Array.isArray(seg)) s += seg[0] + ' ' + seg.slice(1).join(' ') + ' '; });
   return s.trim();
+};
+
+/**
+ * Find the global z-swap point for a time segment by scanning all objects' keyframes.
+ */
+const findGlobalZSwapForSegment = (allNormalizedKfs, prevTime, currTime) => {
+  const midTime = (prevTime + currTime) / 2;
+  let globalSwap = null;
+
+  for (const objId of Object.keys(allNormalizedKfs)) {
+    const objKfs = allNormalizedKfs[objId];
+    if (!objKfs || objKfs.length < 2) continue;
+    const { before, after } = findSurroundingKeyframes(objKfs, midTime);
+    if (!before || !after || before === after) continue;
+
+    const beforeZ = before.properties.zIndex ?? 0;
+    const afterZ = after.properties.zIndex ?? 0;
+    if (beforeZ === afterZ) continue;
+
+    if (after.zSwapPoint !== undefined && after.zSwapPoint !== null) {
+      if (globalSwap === null) {
+        globalSwap = after.zSwapPoint;
+      } else {
+        globalSwap = Math.min(globalSwap, after.zSwapPoint);
+      }
+    }
+  }
+  return globalSwap ?? 0.5;
 };
 
 export const generateAnimationCode = (canvasObjects, keyframes, duration, loopPlayback = false, fabricCanvas = null, canvasBgColor = '#f0f0f0') => {
@@ -72,7 +101,6 @@ body {
     if (groupChildren.has(obj.id)) return;
     const rawKfs = keyframes[obj.id] || [];
     if (rawKfs.length === 0) return;
-    // Paths and groups create elements in JS, not CSS
     if (obj.type === 'path' || obj.type === 'group') return;
 
     const objKfs = normalizeKeyframeRotations(rawKfs);
@@ -99,6 +127,18 @@ body {
   return css;
 };
 
+/**
+ * Generate a tl.set() call for z-index at the global swap point.
+ */
+const generateZSwapCode = (selector, prev, curr, globalSwapPoint) => {
+  const prevZ = prev.properties.zIndex ?? 0;
+  const currZ = curr.properties.zIndex ?? 0;
+  if (prevZ === currZ) return '';
+  const swapTime = prev.time + (curr.time - prev.time) * globalSwapPoint;
+  return `    tl.set('${selector}', { zIndex: ${currZ} }, ${swapTime.toFixed(2)});
+`;
+};
+
 const generateJavaScript = (canvasObjects, keyframes, duration, loopPlayback, fabricCanvas) => {
   const repeatValue = loopPlayback ? -1 : 0;
   
@@ -117,13 +157,20 @@ document.addEventListener('DOMContentLoaded', () => {
   const groupChildren = new Set();
   canvasObjects.forEach(obj => { if (obj.type === 'group' && obj.children) obj.children.forEach(c => groupChildren.add(c)); });
 
-  // Creation phase
+  // Pre-compute all normalized keyframes for global swap point lookups
+  const allNormalizedKfs = {};
   canvasObjects.forEach(obj => {
+    if (groupChildren.has(obj.id)) return;
     const rawKfs = keyframes[obj.id] || [];
     if (rawKfs.length === 0) return;
-    if (groupChildren.has(obj.id)) return;
+    allNormalizedKfs[obj.id] = normalizeKeyframeRotations(rawKfs);
+  });
 
-    const objKfs = normalizeKeyframeRotations(rawKfs);
+  // Creation phase
+  canvasObjects.forEach(obj => {
+    const objKfs = allNormalizedKfs[obj.id];
+    if (!objKfs || objKfs.length === 0) return;
+    if (groupChildren.has(obj.id)) return;
     const firstKf = objKfs[0];
 
     if (obj.type === 'group') js += generateGroupCreation(obj, firstKf, canvasObjects, fabricCanvas);
@@ -133,16 +180,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Animation phase
   canvasObjects.forEach(obj => {
-    const rawKfs = keyframes[obj.id] || [];
-    if (rawKfs.length < 2) return;
+    const objKfs = allNormalizedKfs[obj.id];
+    if (!objKfs || objKfs.length < 2) return;
     if (groupChildren.has(obj.id)) return;
 
-    const objKfs = normalizeKeyframeRotations(rawKfs);
     js += `    // Animate ${obj.name}\n`;
 
-    if (obj.type === 'path') js += generatePathAnimation(obj, objKfs);
-    else if (obj.type === 'group') js += generateGroupAnimation(obj, objKfs);
-    else js += generateRegularAnimation(obj, objKfs);
+    if (obj.type === 'path') js += generatePathAnimation(obj, objKfs, allNormalizedKfs);
+    else if (obj.type === 'group') js += generateGroupAnimation(obj, objKfs, allNormalizedKfs);
+    else js += generateRegularAnimation(obj, objKfs, allNormalizedKfs);
   });
 
   js += `    tl.play();
@@ -155,18 +201,15 @@ document.addEventListener('DOMContentLoaded', () => {
 const generatePathCreation = (obj, firstKf, fabricCanvas) => {
   const pathString = fabricPathToSVGPath(obj.pathData);
   
-  // Get pathOffset from the fabric object
   const fo = fabricCanvas?.getObjects().find(o => o.id === obj.id);
   const pathOffsetX = fo?.pathOffset?.x || firstKf.properties.pathOffsetX || 0;
   const pathOffsetY = fo?.pathOffset?.y || firstKf.properties.pathOffsetY || 0;
   
-  // Support custom anchor points for paths so stickman arms rotate correctly
   const width = fo?.width || firstKf.properties.width || obj.width || 0;
   const height = fo?.height || firstKf.properties.height || obj.height || 0;
   const anchorX = obj.anchorX ?? 0.5;
   const anchorY = obj.anchorY ?? 0.5;
   
-  // Calculate the translated center based on the custom anchor point
   const transX = pathOffsetX + (anchorX - 0.5) * width;
   const transY = pathOffsetY + (anchorY - 0.5) * height;
   
@@ -185,10 +228,8 @@ const generatePathCreation = (obj, firstKf, fabricCanvas) => {
     ${wrapperId}.style.zIndex = '${zIndex}';
 `;
 
-  // Embedded fill images (rendered BEFORE svg so they appear behind strokes)
   if (obj.fills?.length > 0) {
     obj.fills.forEach((fill, idx) => {
-      // Offset the fill to maintain its position relative to the new anchor point
       const adjustedLeft = fill.relLeft - (anchorX - 0.5) * width;
       const adjustedTop = fill.relTop - (anchorY - 0.5) * height;
       
@@ -207,7 +248,6 @@ const generatePathCreation = (obj, firstKf, fabricCanvas) => {
     });
   }
 
-  // Use the anchor-adjusted translate
   js += `    var svg_${wrapperId} = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     svg_${wrapperId}.style.position = 'absolute';
     svg_${wrapperId}.style.left = '0px';
@@ -328,8 +368,7 @@ const generateSolidChildCreation = (fc, childObj, parentId, relLeft, relTop, sca
 `;
   } else if (fc.type === 'text') {
     cw = (fc.width || 50) * scaleX; ch = (fc.height || 24) * scaleY;
-    js += `    ${fc.id}.textContent = '${(fc.text || 'Text').replace(/'/g, "\\'")}';
-    ${fc.id}.style.fontSize = '${((fc.fontSize || 24) * scaleY).toFixed(2)}px';
+    js += `    ${fc.id}.textContent = '${(fc.text || 'Text').replace(/'/g, "\\'")}';\n    ${fc.id}.style.fontSize = '${((fc.fontSize || 24) * scaleY).toFixed(2)}px';
     ${fc.id}.style.color = '${fillColor || '#000000'}';
     ${fc.id}.style.whiteSpace = 'nowrap';
 `;
@@ -375,10 +414,11 @@ const generateRegularCreation = (obj, firstKf) => {
 };
 
 // ========== ANIMATION GENERATORS ==========
-const generatePathAnimation = (obj, objKfs) => {
+const generatePathAnimation = (obj, objKfs, allNormalizedKfs) => {
   let js = '';
   for (let i = 1; i < objKfs.length; i++) {
     const prev = objKfs[i - 1], curr = objKfs[i];
+    const globalSwap = findGlobalZSwapForSegment(allNormalizedKfs, prev.time, curr.time);
     js += `    tl.to('#${obj.id}', {
         duration: ${(curr.time - prev.time).toFixed(2)},
         left: '${curr.properties.x.toFixed(2)}px',
@@ -387,19 +427,21 @@ const generatePathAnimation = (obj, objKfs) => {
         scaleY: ${curr.properties.scaleY.toFixed(2)},
         rotation: ${curr.properties.rotation.toFixed(2)},
         opacity: ${curr.properties.opacity.toFixed(2)},
-        zIndex: ${curr.properties.zIndex ?? 0},
         ease: '${mapEasingToGSAP(curr.easing || 'linear')}'
     }, ${prev.time.toFixed(2)});
-    
+`;
+    js += generateZSwapCode(`#${obj.id}`, prev, curr, globalSwap);
+    js += `    
 `;
   }
   return js;
 };
 
-const generateGroupAnimation = (obj, objKfs) => {
+const generateGroupAnimation = (obj, objKfs, allNormalizedKfs) => {
   let js = '';
   for (let i = 1; i < objKfs.length; i++) {
     const prev = objKfs[i - 1], curr = objKfs[i];
+    const globalSwap = findGlobalZSwapForSegment(allNormalizedKfs, prev.time, curr.time);
     js += `    tl.to('#${obj.id}', {
         duration: ${(curr.time - prev.time).toFixed(2)},
         left: '${curr.properties.x.toFixed(2)}px',
@@ -408,21 +450,23 @@ const generateGroupAnimation = (obj, objKfs) => {
         scaleY: ${curr.properties.scaleY.toFixed(2)},
         rotation: ${curr.properties.rotation.toFixed(2)},
         opacity: ${curr.properties.opacity.toFixed(2)},
-        zIndex: ${curr.properties.zIndex ?? 0},
         ease: '${mapEasingToGSAP(curr.easing || 'linear')}'
     }, ${prev.time.toFixed(2)});
-    
+`;
+    js += generateZSwapCode(`#${obj.id}`, prev, curr, globalSwap);
+    js += `    
 `;
   }
   return js;
 };
 
-const generateRegularAnimation = (obj, objKfs) => {
+const generateRegularAnimation = (obj, objKfs, allNormalizedKfs) => {
   const anchorX = obj.anchorX ?? 0.5, anchorY = obj.anchorY ?? 0.5;
   const ew = 100, eh = 100;
   let js = '';
   for (let i = 1; i < objKfs.length; i++) {
     const prev = objKfs[i - 1], curr = objKfs[i];
+    const globalSwap = findGlobalZSwapForSegment(allNormalizedKfs, prev.time, curr.time);
     js += `    tl.to('#${obj.id}', {
         duration: ${(curr.time - prev.time).toFixed(2)},
         left: '${(curr.properties.x - anchorX * ew).toFixed(2)}px',
@@ -431,10 +475,11 @@ const generateRegularAnimation = (obj, objKfs) => {
         scaleY: ${curr.properties.scaleY.toFixed(2)},
         rotation: ${curr.properties.rotation.toFixed(2)},
         opacity: ${curr.properties.opacity.toFixed(2)},
-        zIndex: ${curr.properties.zIndex ?? 0},
         ease: '${mapEasingToGSAP(curr.easing || 'linear')}'
     }, ${prev.time.toFixed(2)});
-    
+`;
+    js += generateZSwapCode(`#${obj.id}`, prev, curr, globalSwap);
+    js += `    
 `;
   }
   return js;

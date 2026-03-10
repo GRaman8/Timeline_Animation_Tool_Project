@@ -24,6 +24,7 @@ import {
   canvasBgColorState,
   fillToolActiveState,
   fillToolColorState,
+  hiddenTracksState,
 } from './atoms';
 
 import {
@@ -129,8 +130,12 @@ export const useCanvasBgColor = () => {
 
 export const useFillToolActive = () => {
   return useRecoilState(fillToolActiveState);
-}
+};
 
 export const useFillToolColor = () => {
   return useRecoilState(fillToolColorState);
-} 
+};
+
+export const useHiddenTracks = () => {
+  return useRecoilState(hiddenTracksState);
+};
