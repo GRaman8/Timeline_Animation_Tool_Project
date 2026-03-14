@@ -7,7 +7,9 @@ import {
   Checkbox,
   FormControlLabel,
   TextField,
-  Tooltip
+  Tooltip,
+  Snackbar,
+  Alert,
 } from '@mui/material';
 import { 
   PlayArrow, 
@@ -25,7 +27,9 @@ import {
   useFabricCanvas,
   useKeyframes,
   useLoopPlayback,
-  useCanvasObjects
+  useCanvasObjects,
+  useLockedTracks,
+  useSelectedKeyframe,
 } from '../../store/hooks';
 import { extractPropertiesFromFabricObject, findFabricObjectById } from '../../utils/fabricHelpers';
 
@@ -38,16 +42,15 @@ const PlaybackControls = () => {
   const [keyframes, setKeyframes] = useKeyframes();
   const [loopPlayback, setLoopPlayback] = useLoopPlayback();
   const [canvasObjects] = useCanvasObjects();
+  const [lockedTracks] = useLockedTracks();
+  const [, setSelectedKeyframe] = useSelectedKeyframe();
 
   const animationFrameRef = useRef(null);
   const playbackStartTimeRef = useRef(null);
+  const [snackMessage, setSnackMessage] = React.useState('');
+  const [snackSeverity, setSnackSeverity] = React.useState('warning');
   
-  /**
-   * FIX: Use refs for values accessed inside requestAnimationFrame loop.
-   * The animate() function runs asynchronously via rAF, so it captures
-   * closure values from when handlePlay was called. Using refs ensures
-   * the animate function always reads the CURRENT values.
-   */
+  // Refs for values read inside rAF loop (avoids stale closure)
   const loopPlaybackRef = useRef(loopPlayback);
   const durationRef = useRef(duration);
   
@@ -61,6 +64,7 @@ const PlaybackControls = () => {
 
   const handlePlay = useCallback(() => {
     setIsPlaying(true);
+    setSelectedKeyframe(null);
     playbackStartTimeRef.current = Date.now() - (currentTime * 1000);
 
     const animate = () => {
@@ -69,7 +73,6 @@ const PlaybackControls = () => {
 
       if (elapsed >= dur) {
         if (loopPlaybackRef.current) {
-          // Loop back to start
           setCurrentTime(0);
           playbackStartTimeRef.current = Date.now();
           animationFrameRef.current = requestAnimationFrame(animate);
@@ -85,7 +88,7 @@ const PlaybackControls = () => {
     };
 
     animationFrameRef.current = requestAnimationFrame(animate);
-  }, [currentTime, setCurrentTime, setIsPlaying]);
+  }, [currentTime, setCurrentTime, setIsPlaying, setSelectedKeyframe]);
 
   const handlePause = useCallback(() => {
     setIsPlaying(false);
@@ -100,9 +103,9 @@ const PlaybackControls = () => {
       cancelAnimationFrame(animationFrameRef.current);
     }
     setCurrentTime(0);
-  }, [setCurrentTime, setIsPlaying]);
+    setSelectedKeyframe(null);
+  }, [setCurrentTime, setIsPlaying, setSelectedKeyframe]);
 
-  // Step to previous keyframe
   const handleStepPrevious = () => {
     const allKeyframeTimes = [];
     Object.values(keyframes).forEach(objKeyframes => {
@@ -113,8 +116,7 @@ const PlaybackControls = () => {
       });
     });
     allKeyframeTimes.sort((a, b) => a - b);
-
-    const previousTimes = allKeyframeTimes.filter(t => t < currentTime);
+    const previousTimes = allKeyframeTimes.filter(t => t < currentTime - 0.01);
     if (previousTimes.length > 0) {
       setCurrentTime(previousTimes[previousTimes.length - 1]);
     } else {
@@ -122,7 +124,6 @@ const PlaybackControls = () => {
     }
   };
 
-  // Step to next keyframe
   const handleStepNext = () => {
     const allKeyframeTimes = [];
     Object.values(keyframes).forEach(objKeyframes => {
@@ -133,49 +134,164 @@ const PlaybackControls = () => {
       });
     });
     allKeyframeTimes.sort((a, b) => a - b);
-
-    const nextTimes = allKeyframeTimes.filter(t => t > currentTime);
+    const nextTimes = allKeyframeTimes.filter(t => t > currentTime + 0.01);
     if (nextTimes.length > 0) {
       setCurrentTime(nextTimes[0]);
     }
   };
 
-  const handleAddKeyframe = () => {
-    if (!selectedObject || !fabricCanvas) return;
+  /**
+   * Helper: Build a keyframe entry for a single fabric object at the current time.
+   * Returns the {objectId, keyframe} pair or null if locked/missing.
+   * Does NOT mutate state — caller batches all updates into one setKeyframes call.
+   */
+  const buildKeyframeForObject = useCallback((objectId) => {
+    if (!fabricCanvas || !objectId) return null;
+    if (lockedTracks[objectId]) return null;
 
-    const fabricObject = findFabricObjectById(fabricCanvas, selectedObject);
-    if (!fabricObject) return;
+    const fabricObject = findFabricObjectById(fabricCanvas, objectId);
+    if (!fabricObject) return null;
 
     const properties = extractPropertiesFromFabricObject(fabricObject);
-    const newKeyframe = {
-      time: currentTime,
-      properties,
-      easing: 'linear',
+    if (!properties) return null;
+
+    // For path objects, include pathOffset data for LivePreview/Export
+    if (fabricObject.type === 'path' && fabricObject.pathOffset) {
+      properties.pathOffsetX = fabricObject.pathOffset.x || 0;
+      properties.pathOffsetY = fabricObject.pathOffset.y || 0;
+    }
+
+    return {
+      objectId,
+      keyframe: {
+        time: currentTime,
+        properties,
+        easing: 'linear',
+      },
     };
+  }, [fabricCanvas, currentTime, lockedTracks]);
+
+  /**
+   * Batch-insert keyframes for multiple objects in a SINGLE setKeyframes call.
+   * This is critical for correctness — all objects get keyframed atomically
+   * at the exact same time with their exact current positions.
+   */
+  const batchAddKeyframes = useCallback((entries) => {
+    if (entries.length === 0) return;
 
     setKeyframes(prev => {
-      const objectKeyframes = prev[selectedObject] || [];
-      const existingIndex = objectKeyframes.findIndex(
-        kf => Math.abs(kf.time - currentTime) < 0.05
-      );
+      const next = { ...prev };
 
-      let updatedKeyframes;
-      if (existingIndex >= 0) {
-        updatedKeyframes = [...objectKeyframes];
-        updatedKeyframes[existingIndex] = newKeyframe;
-      } else {
-        updatedKeyframes = [...objectKeyframes, newKeyframe]
-          .sort((a, b) => a.time - b.time);
-      }
+      entries.forEach(({ objectId, keyframe }) => {
+        const objectKeyframes = next[objectId] || [];
+        const existingIndex = objectKeyframes.findIndex(
+          kf => Math.abs(kf.time - keyframe.time) < 0.05
+        );
 
-      return {
-        ...prev,
-        [selectedObject]: updatedKeyframes,
-      };
+        if (existingIndex >= 0) {
+          const updated = [...objectKeyframes];
+          updated[existingIndex] = keyframe;
+          next[objectId] = updated;
+        } else {
+          next[objectId] = [...objectKeyframes, keyframe].sort((a, b) => a.time - b.time);
+        }
+      });
+
+      return next;
     });
+  }, [setKeyframes]);
+
+  /**
+   * Add Keyframe — supports MULTI-SELECT.
+   * 
+   * When multiple objects are selected (e.g., body + both arms of a stickman),
+   * clicking "Add Keyframe" records a keyframe for ALL of them at once.
+   * This ensures their relative positions are captured exactly as they appear
+   * on canvas, preventing drift during animation playback.
+   */
+  const handleAddKeyframe = () => {
+    if (!fabricCanvas) return;
+
+    // Check for multi-selection (ActiveSelection in Fabric.js)
+    const activeObjects = fabricCanvas.getActiveObjects();
+    
+    if (activeObjects.length > 1) {
+      // MULTI-SELECT KEYFRAMING — batch all into one state update
+      const entries = [];
+      let lockedCount = 0;
+      
+      activeObjects.forEach(fo => {
+        if (fo?.id) {
+          if (lockedTracks[fo.id]) {
+            lockedCount++;
+          } else {
+            const entry = buildKeyframeForObject(fo.id);
+            if (entry) entries.push(entry);
+          }
+        }
+      });
+
+      if (entries.length > 0) {
+        batchAddKeyframes(entries);
+        setSnackSeverity('success');
+        setSnackMessage(`Added keyframes for ${entries.length} object${entries.length > 1 ? 's' : ''} at ${currentTime.toFixed(2)}s${lockedCount > 0 ? ` (${lockedCount} locked, skipped)` : ''}`);
+      } else if (lockedCount > 0) {
+        setSnackSeverity('warning');
+        setSnackMessage('All selected tracks are locked. Unlock them to add keyframes.');
+      }
+      return;
+    }
+
+    // SINGLE OBJECT KEYFRAMING (original behavior)
+    if (!selectedObject) return;
+
+    if (lockedTracks[selectedObject]) {
+      setSnackSeverity('warning');
+      setSnackMessage('This track is locked. Unlock it to add keyframes.');
+      return;
+    }
+
+    const entry = buildKeyframeForObject(selectedObject);
+    if (entry) {
+      batchAddKeyframes([entry]);
+      setSnackSeverity('success');
+      setSnackMessage(`Keyframe added at ${currentTime.toFixed(2)}s`);
+    }
   };
 
-  // Cleanup on unmount
+  /**
+   * Keyframe ALL objects on the canvas at the current time.
+   * Perfect for character animation: position the whole character, 
+   * then click "Keyframe All" to record every part at once.
+   */
+  const handleKeyframeAll = () => {
+    if (!fabricCanvas) return;
+    
+    const entries = [];
+    let lockedCount = 0;
+
+    canvasObjects.forEach(obj => {
+      if (lockedTracks[obj.id]) {
+        lockedCount++;
+      } else {
+        const entry = buildKeyframeForObject(obj.id);
+        if (entry) entries.push(entry);
+      }
+    });
+
+    if (entries.length > 0) {
+      batchAddKeyframes(entries);
+      setSnackSeverity('success');
+      setSnackMessage(`Keyframed all: ${entries.length} object${entries.length > 1 ? 's' : ''} at ${currentTime.toFixed(2)}s${lockedCount > 0 ? ` (${lockedCount} locked, skipped)` : ''}`);
+    } else if (lockedCount > 0) {
+      setSnackSeverity('warning');
+      setSnackMessage('All tracks are locked.');
+    } else {
+      setSnackSeverity('warning');
+      setSnackMessage('No objects on canvas to keyframe.');
+    }
+  };
+
   useEffect(() => {
     return () => {
       if (animationFrameRef.current) {
@@ -184,9 +300,18 @@ const PlaybackControls = () => {
     };
   }, []);
 
+  const isObjectLocked = selectedObject && !!lockedTracks[selectedObject];
+  
+  // Check if multi-select is active
+  const activeObjectCount = fabricCanvas?.getActiveObjects()?.length || 0;
+  const isMultiSelect = activeObjectCount > 1;
+  const hasAnyObjects = canvasObjects.length > 0;
+  // Enable "Add Keyframe" for multi-select OR single selected object
+  const canAddKeyframe = isMultiSelect || selectedObject;
+
   return (
     <Box>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, flexWrap: 'wrap' }}>
         <Tooltip title="Previous Keyframe">
           <IconButton onClick={handleStepPrevious} size="small">
             <SkipPrevious />
@@ -218,7 +343,7 @@ const PlaybackControls = () => {
           </IconButton>
         </Tooltip>
         
-        <Typography variant="body2" sx={{ ml: 2, minWidth: 120 }}>
+        <Typography variant="body2" sx={{ ml: 1, minWidth: 110, fontSize: '0.8rem' }}>
           {currentTime.toFixed(2)}s / {duration.toFixed(1)}s
         </Typography>
 
@@ -230,10 +355,11 @@ const PlaybackControls = () => {
                 onChange={(e) => setLoopPlayback(e.target.checked)}
                 icon={<Replay />}
                 checkedIcon={<Replay color="primary" />}
+                size="small"
               />
             }
             label="Loop"
-            sx={{ ml: 2 }}
+            sx={{ ml: 1 }}
           />
         </Tooltip>
 
@@ -247,15 +373,51 @@ const PlaybackControls = () => {
           inputProps={{ step: 0.5, min: 1 }}
         />
         
-        <Button 
-          variant="contained" 
-          size="small" 
-          onClick={handleAddKeyframe}
-          disabled={!selectedObject}
-        >
-          Add Keyframe
-        </Button>
+        <Tooltip title={
+          isMultiSelect 
+            ? `Add keyframe for all ${activeObjectCount} selected objects at current time`
+            : isObjectLocked 
+              ? "Track is locked — unlock to add keyframes" 
+              : "Add keyframe at current time (select multiple objects to keyframe them all)"
+        }>
+          <span>
+            <Button 
+              variant="contained" 
+              size="small" 
+              onClick={handleAddKeyframe}
+              disabled={!canAddKeyframe || (!!isObjectLocked && !isMultiSelect)}
+              color={isMultiSelect ? "secondary" : isObjectLocked ? "inherit" : "primary"}
+            >
+              {isMultiSelect ? `Add Keyframe (${activeObjectCount})` : 'Add Keyframe'}
+            </Button>
+          </span>
+        </Tooltip>
+
+        <Tooltip title="Add keyframe for EVERY object on canvas at current time — ideal for character animation">
+          <span>
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={handleKeyframeAll}
+              disabled={!hasAnyObjects}
+              color="primary"
+            >
+              ⏺ Keyframe All
+            </Button>
+          </span>
+        </Tooltip>
       </Box>
+
+      <Snackbar
+        open={!!snackMessage}
+        autoHideDuration={3000}
+        onClose={() => setSnackMessage('')}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert severity={snackSeverity} onClose={() => setSnackMessage('')}>
+          {snackMessage}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 };

@@ -1,6 +1,36 @@
 import * as fabric from 'fabric';
 
 /**
+ * Custom render function for the rotation (mtr) control.
+ * Draws a distinct orange circle so it's visually different from the blue square resize handles.
+ */
+export const renderRotationControl = (ctx, left, top, styleOverride, fabricObject) => {
+  const size = fabricObject.cornerSize || 13;
+  ctx.save();
+  ctx.translate(left, top);
+
+  // Outer circle — orange fill
+  ctx.beginPath();
+  ctx.arc(0, 0, size / 2 + 1, 0, Math.PI * 2);
+  ctx.fillStyle = '#ff6b00';
+  ctx.fill();
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Small curved arrow hint inside the circle
+  const r = size / 4;
+  ctx.beginPath();
+  ctx.arc(0, 0, r, -Math.PI * 0.75, Math.PI * 0.55);
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 1.5;
+  ctx.lineCap = 'round';
+  ctx.stroke();
+
+  ctx.restore();
+};
+
+/**
  * Create a new Fabric.js object based on type.
  * ALL objects use originX:'center', originY:'center' so left/top = center.
  * Now accepts optional fill color.
@@ -84,10 +114,6 @@ export const createPathFromPoints = (points, id, settings) => {
 
 /**
  * Create a COMPOUND path from multiple stroke arrays.
- * Each stroke is an array of points. All strokes become subpaths
- * in a single SVG path (separated by M commands).
- * This allows drawing a complex shape (like a dumbbell) in multiple 
- * strokes that become ONE timeline object.
  */
 export const createCompoundPathFromStrokes = (strokes, id, settings) => {
   if (!strokes || strokes.length === 0) return null;
@@ -135,14 +161,10 @@ export const createCompoundPathFromStrokes = (strokes, id, settings) => {
 
 /**
  * Extract properties from a Fabric.js object.
- * 
- * USES left/top DIRECTLY — this is the ORIGIN POINT position.
- * Also extracts zIndex from canvas object order.
  */
 export const extractPropertiesFromFabricObject = (fabricObject) => {
   if (!fabricObject) return null;
 
-  // Get zIndex from canvas object order
   let zIndex = 0;
   if (fabricObject.canvas) {
     const objects = fabricObject.canvas.getObjects();
@@ -150,12 +172,29 @@ export const extractPropertiesFromFabricObject = (fabricObject) => {
     if (zIndex < 0) zIndex = 0;
   }
 
+  // Calculate absolute coordinates safely, resolving ActiveSelections mathematically 
+  let absLeft = fabricObject.left || 0;
+  let absTop = fabricObject.top || 0;
+  let absScaleX = fabricObject.scaleX || 1;
+  let absScaleY = fabricObject.scaleY || 1;
+  let absAngle = fabricObject.angle || 0;
+
+  if (fabricObject.group && fabricObject.group.type === 'activeSelection') {
+    const matrix = fabricObject.calcTransformMatrix();
+    const options = fabric.util.qrDecompose(matrix);
+    absLeft = options.translateX;
+    absTop = options.translateY;
+    absScaleX = options.scaleX;
+    absScaleY = options.scaleY;
+    absAngle = options.angle;
+  }
+
   const baseProps = {
-    x: fabricObject.left || 0,
-    y: fabricObject.top || 0,
-    scaleX: fabricObject.scaleX || 1,
-    scaleY: fabricObject.scaleY || 1,
-    rotation: fabricObject.angle || 0,
+    x: absLeft,
+    y: absTop,
+    scaleX: absScaleX,
+    scaleY: absScaleY,
+    rotation: absAngle,
     opacity: fabricObject.opacity !== undefined ? fabricObject.opacity : 1,
     zIndex,
   };
@@ -166,6 +205,8 @@ export const extractPropertiesFromFabricObject = (fabricObject) => {
       pathData: fabricObject.path,
       strokeColor: fabricObject.stroke,
       strokeWidth: fabricObject.strokeWidth,
+      pathOffsetX: fabricObject.pathOffset?.x || 0,
+      pathOffsetY: fabricObject.pathOffset?.y || 0,
     };
   }
 
@@ -173,11 +214,18 @@ export const extractPropertiesFromFabricObject = (fabricObject) => {
 };
 
 /**
- * Find a Fabric.js object by ID
+ * Find a Fabric.js object by ID - searches inside active selections as well
  */
 export const findFabricObjectById = (canvas, id) => {
   if (!canvas) return null;
-  return canvas.getObjects().find(obj => obj.id === id) || null;
+  let obj = canvas.getObjects().find(o => o.id === id);
+  if (!obj) {
+    const active = canvas.getActiveObject();
+    if (active && active.type === 'activeSelection' && active._objects) {
+      obj = active._objects.find(o => o.id === id);
+    }
+  }
+  return obj || null;
 };
 
 /**
@@ -216,9 +264,7 @@ export const ungroupFabricGroup = (fabricCanvas, group) => {
   childrenData.forEach(({ item, absLeft, absTop, absScaleX, absScaleY, absAngle, absOpacity }) => {
     item.group = undefined;
     item.canvas = undefined;
-    if (item._cacheCanvas) {
-      item._cacheCanvas = null;
-    }
+    if (item._cacheCanvas) item._cacheCanvas = null;
     
     item.set({
       left: absLeft,
@@ -246,12 +292,12 @@ export const ungroupFabricGroup = (fabricCanvas, group) => {
 
 /**
  * Change the anchor/pivot point of a Fabric.js object.
+ * Uses renderRotationControl to keep the rotation handle visually distinct.
  */
 export const changeAnchorPoint = (fabricObject, anchorX, anchorY) => {
   if (!fabricObject) return;
   
   const currentCenter = fabricObject.getCenterPoint();
-  
   const isCenter = Math.abs(anchorX - 0.5) < 0.01 && Math.abs(anchorY - 0.5) < 0.01;
   
   if (!fabricObject._hasCustomControls) {
@@ -263,43 +309,29 @@ export const changeAnchorPoint = (fabricObject, anchorX, anchorY) => {
   
   if (isCenter) {
     fabricObject.centeredRotation = true;
-    fabricObject.set({
-      originX: 'center',
-      originY: 'center',
-    });
-    
+    fabricObject.set({ originX: 'center', originY: 'center' });
     fabricObject.controls.mtr = new fabric.Control({
-      x: 0,
-      y: -0.5,
-      offsetY: existingMtr?.offsetY ?? -40,
+      x: 0, y: -0.5, offsetY: existingMtr?.offsetY ?? -40,
       cursorStyleHandler: existingMtr?.cursorStyleHandler,
       actionHandler: existingMtr?.actionHandler,
-      actionName: 'rotate',
-      withConnection: true,
+      actionName: 'rotate', withConnection: true,
+      render: renderRotationControl,
     });
-    
   } else {
     fabricObject.centeredRotation = false;
-    fabricObject.set({
-      originX: anchorX,
-      originY: anchorY,
-    });
-    
+    fabricObject.set({ originX: anchorX, originY: anchorY });
     fabricObject.controls.mtr = new fabric.Control({
-      x: anchorX - 0.5,
-      y: anchorY - 0.5,
-      offsetY: existingMtr?.offsetY ?? -40,
+      x: anchorX - 0.5, y: anchorY - 0.5, offsetY: existingMtr?.offsetY ?? -40,
       cursorStyleHandler: existingMtr?.cursorStyleHandler,
       actionHandler: existingMtr?.actionHandler,
-      actionName: 'rotate',
-      withConnection: true,
+      actionName: 'rotate', withConnection: true,
+      render: renderRotationControl,
     });
   }
   
   fabricObject.setPositionByOrigin(
     new fabric.Point(currentCenter.x, currentCenter.y),
-    'center',
-    'center'
+    'center', 'center'
   );
   
   fabricObject.dirty = true;

@@ -38,11 +38,57 @@ export const findSurroundingKeyframes = (keyframes, time) => {
 };
 
 /**
+ * Scan ALL objects' keyframes to find a unified z-swap point for the current time.
+ * 
+ * If ANY object whose z-index changes in its current time segment has a custom
+ * zSwapPoint, that value is used for ALL objects. This ensures that when two
+ * objects swap layers, they both switch at exactly the same moment.
+ * 
+ * @param {Object} allKeyframes - The full keyframes state: { [objectId]: [...kfs] }
+ * @param {number} time - Current playback/scrub time
+ * @returns {number|null} The global swap point (0-1), or null if no custom point found (use per-keyframe defaults)
+ */
+export const findGlobalZSwapPoint = (allKeyframes, time) => {
+  let globalSwapPoint = null;
+
+  for (const objId of Object.keys(allKeyframes)) {
+    const kfs = allKeyframes[objId];
+    if (!kfs || kfs.length < 2) continue;
+
+    const { before, after } = findSurroundingKeyframes(kfs, time);
+    if (!before || !after || before === after) continue;
+
+    // Only consider objects whose z-index actually changes in this segment
+    const beforeZ = before.properties.zIndex ?? 0;
+    const afterZ = after.properties.zIndex ?? 0;
+    if (beforeZ === afterZ) continue;
+
+    // If this keyframe has a custom swap point, adopt it globally
+    if (after.zSwapPoint !== undefined && after.zSwapPoint !== null) {
+      // If we already found one, pick the earliest (smallest) to be safe
+      if (globalSwapPoint === null) {
+        globalSwapPoint = after.zSwapPoint;
+      } else {
+        globalSwapPoint = Math.min(globalSwapPoint, after.zSwapPoint);
+      }
+    }
+  }
+
+  return globalSwapPoint;
+};
+
+/**
  * Interpolate properties between two keyframes at a given time with easing.
  * Rotation is normalized to take the shortest angular path.
- * zIndex is included and rounded to integer (step interpolation).
+ * zIndex uses step interpolation at a configurable swap point.
+ * 
+ * @param {Object} beforeKf - The keyframe before (or at) the current time
+ * @param {Object} afterKf - The keyframe after (or at) the current time
+ * @param {number} time - Current time
+ * @param {string} easingType - Easing function name
+ * @param {number|null} globalZSwapPoint - If provided, overrides the per-keyframe zSwapPoint
  */
-export const interpolateProperties = (beforeKf, afterKf, time, easingType = 'linear') => {
+export const interpolateProperties = (beforeKf, afterKf, time, easingType = 'linear', globalZSwapPoint = null) => {
   if (!beforeKf || !afterKf) return null;
   
   if (beforeKf.time === afterKf.time) {
@@ -57,10 +103,13 @@ export const interpolateProperties = (beforeKf, afterKf, time, easingType = 'lin
     afterKf.properties.rotation
   );
 
-  // zIndex uses step interpolation (snaps at midpoint)
+  // zIndex uses step interpolation — snaps at the swap point.
+  // globalZSwapPoint (from scanning all objects) takes priority,
+  // then the keyframe's own zSwapPoint, then default 0.5.
   const beforeZ = beforeKf.properties.zIndex ?? 0;
   const afterZ = afterKf.properties.zIndex ?? 0;
-  const interpolatedZ = rawT < 0.5 ? beforeZ : afterZ;
+  const swapPoint = globalZSwapPoint ?? afterKf.zSwapPoint ?? 0.5;
+  const interpolatedZ = rawT < swapPoint ? beforeZ : afterZ;
 
   return {
     x: lerp(beforeKf.properties.x, afterKf.properties.x, t),
@@ -114,7 +163,6 @@ export const applyZIndexOrdering = (fabricCanvas) => {
   // Apply ordering using Fabric v6 API
   objectsWithZIndex.forEach((obj) => {
     try {
-      // Move to front in order (lowest zIndex first, highest last = on top)
       if (typeof fabricCanvas.bringObjectToFront === 'function') {
         fabricCanvas.bringObjectToFront(obj);
       }
@@ -147,6 +195,7 @@ export const snapToNearestKeyframe = (time, keyframes, threshold = 0.1) => {
 /**
  * Pre-process keyframes to normalize rotation values for animation.
  * Used by LivePreview and codeGenerator before building GSAP timelines.
+ * Preserves all keyframe-level properties (easing, zSwapPoint, etc).
  */
 export const normalizeKeyframeRotations = (keyframes) => {
   if (!keyframes || keyframes.length < 2) return keyframes;
