@@ -1,1 +1,1 @@
-## This version of the codebase uses MUI package for styling the applications
+## This version of the code-base uses MUI package for styling the applications
