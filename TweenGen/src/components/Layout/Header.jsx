@@ -8,7 +8,7 @@ const Header = () => {
   return (
     <>
       <header className="flex items-center justify-between px-5 h-12 bg-[#1976d2] text-white shadow-md shrink-0" role="banner">
-        <h1 className="text-base font-semibold tracking-tight">Timeline Animation Tool</h1>
+        <h1 className="text-base font-semibold tracking-tight">TweenGen</h1>
         <div className="flex items-center gap-4">
           <span className="text-[13px] text-blue-100 hidden sm:inline">Full Featured Animation Editor</span>
           <button
