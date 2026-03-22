@@ -1,10 +1,11 @@
 /**
  * Code Generator — Produces standalone HTML/CSS/JS animation
- * Supports: all shape types (CSS + SVG), paths, groups, images, canvas bg color, color animation
+ * Supports: all shape types (CSS + SVG), paths, groups, images (bitmap + vector), canvas bg color, color animation
  */
 
 import { normalizeKeyframeRotations, findSurroundingKeyframes } from './interpolation';
 import { SVG_SHAPE_KEYS } from './shapeDefinitions';
+import { parseSVGDimensions } from './imageTracer';
 
 const CANVAS_WIDTH = 1400;
 const CANVAS_HEIGHT = 800;
@@ -41,10 +42,6 @@ const generateZSwapCode = (selector, prev, curr, globalSwapPoint) => {
   return `    tl.set('${selector}', { zIndex: ${currZ} }, ${swapTime.toFixed(2)});\n`;
 };
 
-/**
- * Generate fill color animation code for a segment between two keyframes.
- * Returns JS code string or empty string if no color change.
- */
 const generateFillAnimCode = (objId, objType, prev, curr) => {
   const prevFill = prev.properties.fill;
   const currFill = curr.properties.fill;
@@ -81,6 +78,18 @@ const getDefaultFillColor = (type) => {
     case 'text': return '#000000';
     default: return '#000000';
   }
+};
+
+/**
+ * Escape a string for safe insertion into a JS string literal.
+ * Handles quotes, newlines, and backslashes.
+ */
+const escapeJSString = (str) => {
+  return str
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r');
 };
 
 // ===================================================================
@@ -127,7 +136,6 @@ const generateCSS = (canvasObjects, keyframes, fabricCanvas, canvasBgColor) => {
     if (groupChildren.has(obj.id)) return;
     const rawKfs = keyframes[obj.id] || [];
     if (rawKfs.length === 0) return;
-    // Types created entirely in JS — skip CSS
     if (obj.type === 'path' || obj.type === 'group' || obj.type === 'image' || SVG_SHAPE_KEYS.has(obj.type)) return;
 
     const objKfs = normalizeKeyframeRotations(rawKfs);
@@ -136,7 +144,6 @@ const generateCSS = (canvasObjects, keyframes, fabricCanvas, canvasBgColor) => {
     const ax = obj.anchorX ?? 0.5, ay = obj.anchorY ?? 0.5;
     let ew = 100, eh = 100;
     if (obj.type === 'ellipse') eh = 76;
-    // Use first keyframe fill color if available (for color animation)
     const fillColor = p.fill || obj.fill || getDefaultFillColor(obj.type);
 
     css += `#${obj.id} {\n    position: absolute;\n    left: ${(p.x - ax * ew).toFixed(2)}px;\n    top: ${(p.y - ay * eh).toFixed(2)}px;\n    transform-origin: ${(ax * 100).toFixed(0)}% ${(ay * 100).toFixed(0)}%;\n    opacity: ${p.opacity};\n    z-index: ${p.zIndex ?? 0};\n`;
@@ -169,7 +176,6 @@ const generateJavaScript = (canvasObjects, keyframes, duration, loopPlayback, fa
     allNormalizedKfs[obj.id] = normalizeKeyframeRotations(rawKfs);
   });
 
-  // Creation
   canvasObjects.forEach(obj => {
     const objKfs = allNormalizedKfs[obj.id];
     if (!objKfs || objKfs.length === 0 || groupChildren.has(obj.id)) return;
@@ -181,7 +187,6 @@ const generateJavaScript = (canvasObjects, keyframes, duration, loopPlayback, fa
     else js += generateRegularCreation(obj, firstKf);
   });
 
-  // Animation
   canvasObjects.forEach(obj => {
     const objKfs = allNormalizedKfs[obj.id];
     if (!objKfs || objKfs.length < 2 || groupChildren.has(obj.id)) return;
@@ -207,7 +212,6 @@ const generateJavaScript = (canvasObjects, keyframes, duration, loopPlayback, fa
 const generateSvgShapeCreation = (obj, firstKf) => {
   const ax = obj.anchorX ?? 0.5, ay = obj.anchorY ?? 0.5;
   const ew = 100, eh = 100, z = firstKf.properties.zIndex ?? 0;
-  // Prefer keyframe fill for initial color
   const fillColor = firstKf.properties.fill || obj.fill || '#000000';
   return `    // Create ${obj.name} (SVG Shape)
     const ${obj.id} = document.createElement('div');
@@ -225,10 +229,40 @@ const generateSvgShapeCreation = (obj, firstKf) => {
 `;
 };
 
+/**
+ * Image creation: BITMAP mode uses <img> with base64, VECTOR mode uses <svg> with <path> elements.
+ * The vector version contains actual mathematical paths — completely different structure from bitmap.
+ */
 const generateImageCreation = (obj, firstKf) => {
   const ax = obj.anchorX ?? 0.5, ay = obj.anchorY ?? 0.5;
   const ew = obj.imageWidth || 100, eh = obj.imageHeight || 100, z = firstKf.properties.zIndex ?? 0;
-  return `    // Create ${obj.name} (Image)
+  const useVector = obj.svgExportMode === 'vector' && obj.svgTracedData;
+
+  if (useVector) {
+    // VECTOR MODE: Parse traced SVG and embed as inline SVG with <path> elements
+    const { width: traceW, height: traceH, innerSVG } = parseSVGDimensions(obj.svgTracedData);
+    const escapedInner = escapeJSString(innerSVG);
+
+    return `    // Create ${obj.name} (Vector SVG — traced from bitmap)
+    // NOTE: This contains real <path> elements, not embedded bitmap data.
+    // Zoom in to see smooth vector edges — proof of bitmap-to-vector conversion.
+    const ${obj.id} = document.createElement('div');
+    ${obj.id}.id = '${obj.id}';
+    ${obj.id}.style.position = 'absolute';
+    ${obj.id}.style.width = '${ew}px'; ${obj.id}.style.height = '${eh}px';
+    ${obj.id}.style.transformOrigin = '${(ax*100).toFixed(0)}% ${(ay*100).toFixed(0)}%';
+    ${obj.id}.style.left = '${(firstKf.properties.x - ax*ew).toFixed(2)}px';
+    ${obj.id}.style.top = '${(firstKf.properties.y - ay*eh).toFixed(2)}px';
+    ${obj.id}.style.zIndex = '${z}'; ${obj.id}.style.pointerEvents = 'none';
+    ${obj.id}.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${traceW} ${traceH}" width="${ew}" height="${eh}" preserveAspectRatio="none" style="display:block">${escapedInner}</svg>';
+    container.appendChild(${obj.id});
+    gsap.set(${obj.id}, { scaleX: ${firstKf.properties.scaleX.toFixed(2)}, scaleY: ${firstKf.properties.scaleY.toFixed(2)}, rotation: ${firstKf.properties.rotation.toFixed(2)}, opacity: ${firstKf.properties.opacity.toFixed(2)} });
+    
+`;
+  }
+
+  // BITMAP MODE (default): <img> with base64 data URL
+  return `    // Create ${obj.name} (Bitmap Image)
     const ${obj.id} = document.createElement('img');
     ${obj.id}.id = '${obj.id}'; ${obj.id}.src = '${obj.imageDataURL}';
     ${obj.id}.style.position = 'absolute'; ${obj.id}.style.width = '${ew}px'; ${obj.id}.style.height = '${eh}px';
@@ -246,7 +280,6 @@ const generateRegularCreation = (obj, firstKf) => {
   const ax = obj.anchorX ?? 0.5, ay = obj.anchorY ?? 0.5;
   let ew = 100, eh = 100;
   if (obj.type === 'ellipse') eh = 76;
-  // Prefer keyframe fill for initial color
   const fillColor = firstKf.properties.fill || obj.fill || getDefaultFillColor(obj.type);
   const z = firstKf.properties.zIndex ?? 0;
   let js = `    // Create ${obj.name}
@@ -272,7 +305,6 @@ const generateRegularCreation = (obj, firstKf) => {
 // Animation helpers
 // ===================================================================
 
-/** Standard animation: works for regular shapes, SVG shapes, images */
 const generateStandardAnimation = (obj, objKfs, allNormalizedKfs, ew, eh) => {
   const ax = obj.anchorX ?? 0.5, ay = obj.anchorY ?? 0.5;
   let js = '';
@@ -281,7 +313,6 @@ const generateStandardAnimation = (obj, objKfs, allNormalizedKfs, ew, eh) => {
     const gs = findGlobalZSwapForSegment(allNormalizedKfs, prev.time, curr.time);
     js += `    tl.to('#${obj.id}', { duration: ${(curr.time - prev.time).toFixed(2)}, left: '${(curr.properties.x - ax * ew).toFixed(2)}px', top: '${(curr.properties.y - ay * eh).toFixed(2)}px', scaleX: ${curr.properties.scaleX.toFixed(2)}, scaleY: ${curr.properties.scaleY.toFixed(2)}, rotation: ${curr.properties.rotation.toFixed(2)}, opacity: ${curr.properties.opacity.toFixed(2)}, ease: '${mapEasingToGSAP(curr.easing || 'linear')}' }, ${prev.time.toFixed(2)});\n`;
     js += generateZSwapCode(`#${obj.id}`, prev, curr, gs);
-    // Fill color animation (backgroundColor for CSS shapes, color for text, attr.fill for SVG)
     js += generateFillAnimCode(obj.id, obj.type, prev, curr);
   }
   return js + '    \n';

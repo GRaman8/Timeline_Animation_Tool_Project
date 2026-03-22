@@ -4,6 +4,7 @@ import gsap from 'gsap';
 import { useCanvasObjects, useKeyframes, useDuration, useFabricCanvas, useCanvasBgColor } from '../../store/hooks';
 import { normalizeKeyframeRotations, findSurroundingKeyframes } from '../../utils/interpolation';
 import { SVG_SHAPE_KEYS } from '../../utils/shapeDefinitions';
+import { createSizedSVG } from '../../utils/imageTracer';
 import { CANVAS_WIDTH, CANVAS_HEIGHT } from '../Canvas/Canvas';
 
 const fabricPathToSVGPath = (pathArray) => {
@@ -93,20 +94,7 @@ const LivePreview = () => {
     return () => { if (timelineRef.current) timelineRef.current.kill(); };
   }, [canvasObjects, keyframes, duration, fabricCanvas, canvasBgColor]);
 
-  /**
-   * Core animation helper — animates position, scale, rotation, opacity, z-index.
-   * Optionally animates fill color if fillTarget and fillProp are provided.
-   * 
-   * @param {HTMLElement} el - The element to animate position/scale/rotation/opacity on
-   * @param {Array} objKfs - Normalized keyframes for this object
-   * @param {Object} allNormalizedKfs - All objects' keyframes (for global z-swap)
-   * @param {number} anchorX - Anchor X (0-1)
-   * @param {number} anchorY - Anchor Y (0-1)
-   * @param {number} ew - Element width
-   * @param {number} eh - Element height
-   * @param {HTMLElement|SVGElement|null} fillTarget - Element to animate fill on (null to skip)
-   * @param {string|null} fillProp - CSS prop ('backgroundColor', 'color') or 'fill' for SVG attr
-   */
+  // Helper for animating keyframes (shared by multiple renderers)
   const animateElement = (el, objKfs, allNormalizedKfs, anchorX, anchorY, ew, eh, fillTarget = null, fillProp = null) => {
     const timeline = timelineRef.current;
     for (let i = 1; i < objKfs.length; i++) {
@@ -130,10 +118,8 @@ const LivePreview = () => {
           const dur = curr.time - prev.time;
           const ease = curr.easing || 'none';
           if (fillProp === 'fill') {
-            // SVG attribute animation
             timeline.to(fillTarget, { duration: dur, attr: { fill: currFill }, ease }, prev.time);
           } else {
-            // CSS property animation (backgroundColor, color)
             timeline.to(fillTarget, { duration: dur, [fillProp]: currFill, ease }, prev.time);
           }
         }
@@ -148,7 +134,6 @@ const LivePreview = () => {
     const firstKf = objKfs[0];
     const anchorX = obj.anchorX ?? 0.5, anchorY = obj.anchorY ?? 0.5;
     const ew = 100, eh = 100;
-    // Prefer keyframe fill, then obj.fill, then default
     const fillColor = firstKf.properties.fill || obj.fill || '#000000';
 
     const wrapper = document.createElement('div');
@@ -178,7 +163,6 @@ const LivePreview = () => {
       rotation: firstKf.properties.rotation, opacity: firstKf.properties.opacity,
     });
 
-    // Animate with SVG fill color support (targets the <path> element)
     animateElement(wrapper, objKfs, allNormalizedKfs, anchorX, anchorY, ew, eh, pathEl, 'fill');
   };
 
@@ -188,7 +172,6 @@ const LivePreview = () => {
     if (objKfs.length === 0) return;
     const firstKf = objKfs[0];
     const anchorX = obj.anchorX ?? 0.5, anchorY = obj.anchorY ?? 0.5;
-    // Prefer keyframe fill, then obj.fill, then default
     const fillColor = firstKf.properties.fill || obj.fill || getDefaultFillColor(obj.type);
 
     let ew = 100, eh = 100;
@@ -202,7 +185,7 @@ const LivePreview = () => {
     } else if (obj.type === 'roundedRect') {
       el.style.width = ew + 'px'; el.style.height = eh + 'px'; el.style.borderRadius = '16px'; el.style.backgroundColor = fillColor;
     } else if (obj.type === 'ellipse') {
-      eh = 76; // rx=50, ry=38 → 100x76
+      eh = 76;
       el.style.width = ew + 'px'; el.style.height = eh + 'px'; el.style.borderRadius = '50%'; el.style.backgroundColor = fillColor;
     } else if (obj.type === 'text') {
       const fo = fabricCanvas?.getObjects().find(o => o.id === obj.id);
@@ -220,12 +203,11 @@ const LivePreview = () => {
       rotation: firstKf.properties.rotation, opacity: firstKf.properties.opacity,
     });
 
-    // Animate with CSS fill color support (backgroundColor for shapes, color for text)
     const fillProp = obj.type === 'text' ? 'color' : 'backgroundColor';
     animateElement(el, objKfs, allNormalizedKfs, anchorX, anchorY, ew, eh, el, fillProp);
   };
 
-  // ===== IMAGE =====
+  // ===== IMAGE (bitmap OR vector depending on svgExportMode) =====
   const renderImage = (obj, objKfs, allNormalizedKfs) => {
     const container = containerRef.current;
     if (objKfs.length === 0) return;
@@ -233,9 +215,27 @@ const LivePreview = () => {
     const anchorX = obj.anchorX ?? 0.5, anchorY = obj.anchorY ?? 0.5;
     const ew = obj.imageWidth || 100, eh = obj.imageHeight || 100;
 
-    const el = document.createElement('img');
-    el.id = obj.id; el.src = obj.imageDataURL;
-    el.style.position = 'absolute'; el.style.width = ew + 'px'; el.style.height = eh + 'px';
+    const useVector = obj.svgExportMode === 'vector' && obj.svgTracedData;
+
+    let el;
+    if (useVector) {
+      // VECTOR MODE: Create a div wrapper with SVG content
+      el = document.createElement('div');
+      el.id = obj.id;
+      el.style.position = 'absolute';
+      el.style.width = ew + 'px';
+      el.style.height = eh + 'px';
+      el.innerHTML = createSizedSVG(obj.svgTracedData, ew, eh);
+    } else {
+      // BITMAP MODE: Standard <img> tag with data URL
+      el = document.createElement('img');
+      el.id = obj.id;
+      el.src = obj.imageDataURL;
+      el.style.position = 'absolute';
+      el.style.width = ew + 'px';
+      el.style.height = eh + 'px';
+    }
+
     el.style.transformOrigin = `${anchorX * 100}% ${anchorY * 100}%`;
     el.style.zIndex = (firstKf.properties.zIndex ?? 0).toString();
     el.style.pointerEvents = 'none';
