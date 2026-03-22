@@ -1,185 +1,120 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
-  Button,
-  Box,
-  Tabs,
-  Tab,
-  Typography,
-  IconButton,
-  Snackbar,
-  Alert
+  Dialog, DialogTitle, DialogContent, DialogActions, Button,
+  Tabs, Tab, Box, Typography, IconButton, Tooltip, Chip, Paper,
 } from '@mui/material';
-import { 
-  ContentCopy, 
-  Download, 
-  Close,
-  Code,
+import {
+  ContentCopy as CopyIcon, Download as DownloadIcon,
+  Close as CloseIcon, Check as CheckIcon,
+  MusicNote as MusicIcon,
 } from '@mui/icons-material';
+import {
+  useCanvasObjects, useKeyframes, useDuration, useFabricCanvas,
+  useCanvasBgColor, useLoopPlayback,
+} from '../../store/hooks';
+import { useAudioFile, useAudioRegion } from '../../store/audioHooks';
 import { generateAnimationCode, downloadAllFiles, copyToClipboard } from '../../utils/codeGenerator';
-import { useCanvasObjects, useKeyframes, useDuration, useLoopPlayback, useFabricCanvas, useCanvasBgColor } from '../../store/hooks';
+import { getAudioExtension } from '../../utils/audioUtils';
 
 const CodeExportDialog = ({ open, onClose }) => {
   const [canvasObjects] = useCanvasObjects();
   const [keyframes] = useKeyframes();
   const [duration] = useDuration();
-  const [loopPlayback] = useLoopPlayback();
   const [fabricCanvas] = useFabricCanvas();
   const [canvasBgColor] = useCanvasBgColor();
-  const [currentTab, setCurrentTab] = useState(0);
-  const [snackbarOpen, setSnackbarOpen] = useState(false);
-  const [snackbarMessage, setSnackbarMessage] = useState('');
+  const [loopPlayback] = useLoopPlayback();
+  const [audioFile] = useAudioFile();
+  const [audioRegion] = useAudioRegion();
 
-  const { html, css, javascript } = generateAnimationCode(
-    canvasObjects, 
-    keyframes, 
-    duration, 
-    loopPlayback,
-    fabricCanvas,
-    canvasBgColor
-  );
+  const [tabIndex, setTabIndex] = useState(0);
+  const [copiedTab, setCopiedTab] = useState(null);
 
-  const handleCopy = async (content, label) => {
-    const success = await copyToClipboard(content);
-    if (success) {
-      setSnackbarMessage(`${label} copied to clipboard!`);
-      setSnackbarOpen(true);
-    }
+  const { html, css, javascript } = useMemo(() => {
+    return generateAnimationCode(canvasObjects, keyframes, duration, loopPlayback, fabricCanvas, canvasBgColor, audioFile, audioRegion);
+  }, [canvasObjects, keyframes, duration, loopPlayback, fabricCanvas, canvasBgColor, audioFile, audioRegion]);
+
+  const handleCopy = async (text, tabName) => {
+    const success = await copyToClipboard(text);
+    if (success) { setCopiedTab(tabName); setTimeout(() => setCopiedTab(null), 2000); }
   };
 
-  const handleDownloadAll = () => {
-    downloadAllFiles(html, css, javascript);
-    setSnackbarMessage('All files downloaded!');
-    setSnackbarOpen(true);
-  };
+  const handleDownloadAll = () => { downloadAllFiles(html, css, javascript, audioFile); };
 
   const tabs = [
-    { label: 'HTML', content: html, language: 'html' },
-    { label: 'CSS', content: css, language: 'css' },
-    { label: 'JavaScript', content: javascript, language: 'javascript' },
+    { label: 'HTML', code: html, key: 'html' },
+    { label: 'CSS', code: css, key: 'css' },
+    { label: 'JavaScript', code: javascript, key: 'js' },
   ];
 
+  const audioExt = audioFile ? getAudioExtension(audioFile.fileName, audioFile.mimeType) : null;
+  const audioExportName = audioFile ? `audio.${audioExt}` : null;
+
+  const formatTime = (s) => s != null ? `${Math.floor(s/60)}:${Math.floor(s%60).toString().padStart(2,'0')}.${Math.floor((s%1)*10)}` : '';
+
   return (
-    <>
-      <Dialog 
-        open={open} 
-        onClose={onClose}
-        maxWidth="lg"
-        fullWidth
-      >
-        <DialogTitle>
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <Code />
-              <Typography variant="h6">Export Animation Code</Typography>
+    <Dialog open={open} onClose={onClose} maxWidth="lg" fullWidth>
+      <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Typography variant="h6">Export Code</Typography>
+          <Chip label={audioFile ? '4 files' : '3 files'} size="small" color={audioFile ? 'primary' : 'default'} variant="outlined" />
+        </Box>
+        <IconButton onClick={onClose} size="small"><CloseIcon /></IconButton>
+      </DialogTitle>
+
+      <DialogContent sx={{ p: 0 }}>
+        {audioFile && (
+          <Paper variant="outlined" sx={{ mx: 3, mt: 2, p: 1.5, display: 'flex', alignItems: 'center', gap: 1.5, bgcolor: 'primary.light', borderColor: 'primary.main' }}>
+            <MusicIcon sx={{ color: 'primary.dark' }} />
+            <Box sx={{ flex: 1 }}>
+              <Typography variant="body2" fontWeight={600} color="primary.dark">
+                Audio: {audioExportName}
+                {audioRegion && (
+                  <span style={{ fontWeight: 400, marginLeft: 8 }}>
+                    (trimmed: {formatTime(audioRegion.start)} → {formatTime(audioRegion.end)})
+                  </span>
+                )}
+              </Typography>
+              <Typography variant="caption" color="primary.dark" sx={{ opacity: 0.8 }}>
+                Original quality preserved. Place the audio file in the same folder as HTML/CSS/JS.
+              </Typography>
             </Box>
-            <IconButton onClick={onClose} size="small">
-              <Close />
-            </IconButton>
+          </Paper>
+        )}
+
+        <Tabs value={tabIndex} onChange={(_, v) => setTabIndex(v)} sx={{ px: 3, borderBottom: 1, borderColor: 'divider' }}>
+          {tabs.map((tab) => (<Tab key={tab.key} label={tab.label} />))}
+        </Tabs>
+
+        {tabs.map((tab, i) => (
+          <Box key={tab.key} role="tabpanel" hidden={tabIndex !== i} sx={{ px: 3, py: 2 }}>
+            {tabIndex === i && (
+              <>
+                <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 1 }}>
+                  <Button size="small" variant="outlined"
+                    startIcon={copiedTab === tab.key ? <CheckIcon /> : <CopyIcon />}
+                    onClick={() => handleCopy(tab.code, tab.key)}
+                    color={copiedTab === tab.key ? 'success' : 'primary'}>
+                    {copiedTab === tab.key ? 'Copied!' : `Copy ${tab.label}`}
+                  </Button>
+                </Box>
+                <Box sx={{ maxHeight: 400, overflow: 'auto', bgcolor: '#1e1e1e', color: '#d4d4d4', p: 2, borderRadius: 1, fontFamily: 'monospace', fontSize: '0.8rem', whiteSpace: 'pre-wrap', wordBreak: 'break-all', lineHeight: 1.5 }}>
+                  {tab.code}
+                </Box>
+              </>
+            )}
           </Box>
-        </DialogTitle>
+        ))}
+      </DialogContent>
 
-        <DialogContent dividers>
-          <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}>
-            <Tabs value={currentTab} onChange={(e, v) => setCurrentTab(v)}>
-              {tabs.map((tab, index) => (
-                <Tab key={index} label={tab.label} />
-              ))}
-            </Tabs>
-          </Box>
-
-          <Box sx={{ position: 'relative' }}>
-            <Box sx={{ 
-              position: 'absolute', 
-              top: 8, 
-              right: 8, 
-              zIndex: 1 
-            }}>
-              <IconButton
-                size="small"
-                onClick={() => handleCopy(tabs[currentTab].content, tabs[currentTab].label)}
-                sx={{ bgcolor: 'background.paper' }}
-              >
-                <ContentCopy fontSize="small" />
-              </IconButton>
-            </Box>
-
-            <Box
-              component="pre"
-              sx={{
-                bgcolor: '#1e1e1e',
-                color: '#d4d4d4',
-                p: 2,
-                borderRadius: 1,
-                overflow: 'auto',
-                maxHeight: 500,
-                fontFamily: 'monospace',
-                fontSize: '0.875rem',
-                lineHeight: 1.5,
-              }}
-            >
-              <code>{tabs[currentTab].content}</code>
-            </Box>
-          </Box>
-
-          <Box sx={{ mt: 2, p: 2, bgcolor: 'info.light', borderRadius: 1 }}>
-            <Typography variant="body2" color="info.contrastText">
-              <strong>💡 Usage Instructions:</strong>
-              <br />
-              1. Download all files or copy each code block
-              <br />
-              2. Create three files: index.html, style.css, and animation.js
-              <br />
-              3. Place all files in the same folder
-              <br />
-              4. Open index.html in a web browser to view your animation
-              <br />
-              5. The animation uses GSAP (loaded from CDN) - no installation required!
-              <br />
-              {loopPlayback && (
-                <>
-                  <br />
-                  <strong>🔁 Loop is ENABLED</strong> - Animation will repeat infinitely
-                </>
-              )}
-              {!loopPlayback && (
-                <>
-                  <br />
-                  <strong>▶️ Loop is DISABLED</strong> - Animation will play once and stop
-                </>
-              )}
-            </Typography>
-          </Box>
-        </DialogContent>
-
-        <DialogActions>
-          <Button onClick={onClose}>
-            Close
-          </Button>
-          <Button 
-            variant="contained" 
-            startIcon={<Download />}
-            onClick={handleDownloadAll}
-          >
-            Download All Files
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      <Snackbar
-        open={snackbarOpen}
-        autoHideDuration={3000}
-        onClose={() => setSnackbarOpen(false)}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-      >
-        <Alert severity="success" onClose={() => setSnackbarOpen(false)}>
-          {snackbarMessage}
-        </Alert>
-      </Snackbar>
-    </>
+      <DialogActions sx={{ px: 3, py: 2, justifyContent: 'space-between' }}>
+        <Typography variant="caption" color="text.secondary">
+          {audioFile ? `Downloads 4 files: index.html, style.css, animation.js, ${audioExportName}` : 'Downloads 3 files: index.html, style.css, animation.js'}
+        </Typography>
+        <Button variant="contained" startIcon={<DownloadIcon />} onClick={handleDownloadAll}>
+          Download All {audioFile ? '(4 files)' : '(3 files)'}
+        </Button>
+      </DialogActions>
+    </Dialog>
   );
 };
 

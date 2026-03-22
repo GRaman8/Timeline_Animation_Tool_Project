@@ -1,5 +1,6 @@
-import React, { useEffect } from 'react';
-import { Box, Drawer, Typography, TextField, Slider, Divider, Paper, Button } from '@mui/material';
+import React, { useEffect, useState, useCallback } from 'react';
+import { Box, Drawer, Typography, TextField, Slider, Divider, Paper, Button, 
+  ToggleButton, ToggleButtonGroup, CircularProgress, Select, MenuItem, FormControl, InputLabel } from '@mui/material';
 import DrawingSettings from '../Toolbar/DrawingSettings';
 import { 
   useSelectedObject, useSelectedObjectProperties, useSelectedObjectDetails,
@@ -8,6 +9,7 @@ import {
   useFillToolActive, useFillToolColor,
 } from '../../store/hooks';
 import { findFabricObjectById, extractPropertiesFromFabricObject } from '../../utils/fabricHelpers';
+import { traceImageToSVG, TRACE_PRESETS, createSizedSVG } from '../../utils/imageTracer';
 
 // All types that have a fill/color property (not paths, groups, or images)
 const FILL_TYPES = new Set([
@@ -29,6 +31,10 @@ const PropertiesPanel = () => {
   const [canvasBgColor, setCanvasBgColor] = useCanvasBgColor();
   const [fillToolActive] = useFillToolActive();
   const [fillToolColor, setFillToolColor] = useFillToolColor();
+
+  // SVG tracing state
+  const [isTracing, setIsTracing] = useState(false);
+  const [traceError, setTraceError] = useState(null);
 
   const drawerWidth = 300;
 
@@ -107,6 +113,64 @@ const PropertiesPanel = () => {
     ));
   };
 
+  // ==================== SVG TRACING HANDLERS ====================
+
+  const handleExportModeChange = (event, newMode) => {
+    if (!newMode || !selectedObject) return;
+    setTraceError(null);
+    setCanvasObjects(prev => prev.map(obj =>
+      obj.id === selectedObject ? { ...obj, svgExportMode: newMode } : obj
+    ));
+
+    // If switching to vector and no trace data exists yet, trigger a trace
+    const objData = canvasObjects.find(obj => obj.id === selectedObject);
+    if (newMode === 'vector' && objData && !objData.svgTracedData) {
+      runTrace(objData.imageDataURL, objData.svgTracePreset || 'detailed');
+    }
+  };
+
+  const handlePresetChange = (event) => {
+    const presetKey = event.target.value;
+    if (!selectedObject) return;
+    setCanvasObjects(prev => prev.map(obj =>
+      obj.id === selectedObject ? { ...obj, svgTracePreset: presetKey, svgTracedData: null } : obj
+    ));
+    // Re-trace with new preset
+    const objData = canvasObjects.find(obj => obj.id === selectedObject);
+    if (objData?.svgExportMode === 'vector') {
+      runTrace(objData.imageDataURL, presetKey);
+    }
+  };
+
+  const runTrace = useCallback(async (dataURL, presetKey) => {
+    if (!dataURL || !selectedObject) return;
+    setIsTracing(true);
+    setTraceError(null);
+    try {
+      const svgString = await traceImageToSVG(dataURL, presetKey);
+      // Update the canvas object with the traced SVG data
+      setCanvasObjects(prev => prev.map(obj =>
+        obj.id === selectedObject 
+          ? { ...obj, svgTracedData: svgString, svgTracePreset: presetKey } 
+          : obj
+      ));
+    } catch (err) {
+      console.error('SVG tracing failed:', err);
+      setTraceError(err.message || 'Tracing failed');
+    } finally {
+      setIsTracing(false);
+    }
+  }, [selectedObject, setCanvasObjects]);
+
+  const handleRetrace = () => {
+    const objData = canvasObjects.find(obj => obj.id === selectedObject);
+    if (objData?.imageDataURL) {
+      runTrace(objData.imageDataURL, objData.svgTracePreset || 'detailed');
+    }
+  };
+
+  // ==================== COMPUTED VALUES ====================
+
   const objectData = canvasObjects.find(obj => obj.id === selectedObject);
   const anchorX = objectData?.anchorX ?? 0.5;
   const anchorY = objectData?.anchorY ?? 0.5;
@@ -125,7 +189,13 @@ const PropertiesPanel = () => {
 
   const isSolidShape = objectData && FILL_TYPES.has(objectData.type);
   const isPath = objectData?.type === 'path';
+  const isImage = objectData?.type === 'image';
   const pathFills = objectData?.fills || [];
+
+  // Image SVG conversion state
+  const svgExportMode = objectData?.svgExportMode || 'bitmap';
+  const svgTracePreset = objectData?.svgTracePreset || 'detailed';
+  const svgTracedData = objectData?.svgTracedData || null;
 
   return (
     <Drawer variant="permanent" anchor="right"
@@ -269,6 +339,147 @@ const PropertiesPanel = () => {
                         </Typography>
                       </Paper>
                     )}
+                  </>
+                )}
+
+                {/* ==================== IMAGE SVG CONVERSION ==================== */}
+                {isImage && (
+                  <>
+                    <Divider />
+                    <Box>
+                      <Typography variant="body2" gutterBottom fontWeight={600}>📐 Export Image Format</Typography>
+
+                      <ToggleButtonGroup
+                        value={svgExportMode}
+                        exclusive
+                        onChange={handleExportModeChange}
+                        size="small"
+                        fullWidth
+                        sx={{ mb: 1.5 }}
+                      >
+                        <ToggleButton value="bitmap" sx={{ textTransform: 'none', fontSize: '0.75rem' }}>
+                          🖼️ Bitmap
+                        </ToggleButton>
+                        <ToggleButton value="vector" sx={{ textTransform: 'none', fontSize: '0.75rem' }}>
+                          📐 Vector (SVG)
+                        </ToggleButton>
+                      </ToggleButtonGroup>
+
+                      {svgExportMode === 'bitmap' && (
+                        <Paper variant="outlined" sx={{ p: 1.5, bgcolor: 'grey.50' }}>
+                          <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.5 }}>
+                            Exports the original image as a base64 <code>&lt;img&gt;</code> tag. 
+                            Pixel-perfect but raster — will pixelate if scaled up.
+                          </Typography>
+                        </Paper>
+                      )}
+
+                      {svgExportMode === 'vector' && (
+                        <Box>
+                          {/* Preset selector */}
+                          <FormControl fullWidth size="small" sx={{ mb: 1.5 }}>
+                            <InputLabel>Trace Style</InputLabel>
+                            <Select
+                              value={svgTracePreset}
+                              label="Trace Style"
+                              onChange={handlePresetChange}
+                              disabled={isTracing}
+                            >
+                              {TRACE_PRESETS.map(preset => (
+                                <MenuItem key={preset.key} value={preset.key}>
+                                  <Box>
+                                    <Typography variant="body2">{preset.label}</Typography>
+                                    <Typography variant="caption" color="text.secondary">
+                                      {preset.description}
+                                    </Typography>
+                                  </Box>
+                                </MenuItem>
+                              ))}
+                            </Select>
+                          </FormControl>
+
+                          {/* Trace / Retrace button */}
+                          <Button
+                            variant="outlined"
+                            size="small"
+                            fullWidth
+                            onClick={handleRetrace}
+                            disabled={isTracing}
+                            startIcon={isTracing ? <CircularProgress size={16} /> : null}
+                            sx={{ mb: 1.5 }}
+                          >
+                            {isTracing ? 'Tracing...' : svgTracedData ? 'Re-trace' : 'Trace to SVG'}
+                          </Button>
+
+                          {traceError && (
+                            <Paper variant="outlined" sx={{ p: 1, mb: 1.5, bgcolor: 'error.light' }}>
+                              <Typography variant="caption" color="error.contrastText">
+                                ⚠️ {traceError}
+                              </Typography>
+                            </Paper>
+                          )}
+
+                          {/* Side-by-side comparison */}
+                          {svgTracedData && !isTracing && (
+                            <Paper variant="outlined" sx={{ p: 1.5, bgcolor: '#fafafa' }}>
+                              <Typography variant="caption" fontWeight={700} color="text.secondary" sx={{ display: 'block', mb: 1, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                                Comparison Preview
+                              </Typography>
+                              <Box sx={{ display: 'flex', gap: 1 }}>
+                                {/* Original bitmap */}
+                                <Box sx={{ flex: 1, textAlign: 'center' }}>
+                                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5, fontSize: '0.65rem' }}>
+                                    Bitmap (Original)
+                                  </Typography>
+                                  <Box sx={{ 
+                                    width: '100%', aspectRatio: `${objectData.imageWidth || 1}/${objectData.imageHeight || 1}`,
+                                    border: '1px solid', borderColor: 'divider', borderRadius: 0.5, overflow: 'hidden',
+                                    bgcolor: '#fff',
+                                  }}>
+                                    <img 
+                                      src={objectData.imageDataURL} 
+                                      alt="Original"
+                                      style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }} 
+                                    />
+                                  </Box>
+                                </Box>
+                                {/* Traced SVG */}
+                                <Box sx={{ flex: 1, textAlign: 'center' }}>
+                                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5, fontSize: '0.65rem' }}>
+                                    Vector (SVG Traced)
+                                  </Typography>
+                                  <Box sx={{ 
+                                    width: '100%', aspectRatio: `${objectData.imageWidth || 1}/${objectData.imageHeight || 1}`,
+                                    border: '1px solid', borderColor: 'divider', borderRadius: 0.5, overflow: 'hidden',
+                                    bgcolor: '#fff',
+                                    '& svg': { width: '100%', height: '100%', display: 'block' },
+                                  }}
+                                    dangerouslySetInnerHTML={{ __html: createSizedSVG(svgTracedData, objectData.imageWidth || 100, objectData.imageHeight || 100) }}
+                                  />
+                                </Box>
+                              </Box>
+                              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1, lineHeight: 1.4 }}>
+                                The vector version uses SVG <code>&lt;path&gt;</code> elements — 
+                                no pixels, no base64. It stays sharp at any zoom level.
+                              </Typography>
+                            </Paper>
+                          )}
+
+                          <Paper variant="outlined" sx={{ p: 1.5, mt: 1.5, bgcolor: 'info.light' }}>
+                            <Typography variant="caption" color="info.contrastText" sx={{ lineHeight: 1.5 }}>
+                              💡 <strong>How it works:</strong> The bitmap is traced into 
+                              mathematical vector paths using color quantization and contour detection.
+                              The exported code uses <code>&lt;svg&gt;&lt;path&gt;</code> elements 
+                              instead of <code>&lt;img src="base64..."&gt;</code>.
+                              <br /><br />
+                              <strong>Evidence:</strong> Inspect the exported HTML source to see 
+                              actual <code>&lt;path d="M..."&gt;</code> data — not embedded bitmaps.
+                              Zoom into the exported page to see smooth vector edges.
+                            </Typography>
+                          </Paper>
+                        </Box>
+                      )}
+                    </Box>
                   </>
                 )}
               </Box>

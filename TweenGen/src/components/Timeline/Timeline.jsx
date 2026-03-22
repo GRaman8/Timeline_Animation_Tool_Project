@@ -17,6 +17,7 @@ import {
 import PlaybackControls from './PlaybackControls';
 import TimelineScrubber from './TimelineScrubber';
 import TimelineTrack from './TimelineTrack';
+import AudioTrack from './AudioTrack';
 
 const Timeline = () => {
   const [canvasObjects] = useCanvasObjects();
@@ -105,7 +106,7 @@ const Timeline = () => {
 
   const syncTrackOrderFromCanvas = useCallback(() => {
     if (!fabricCanvas) return;
-    const newOrder = [...fabricCanvas.getObjects()].filter(obj => obj.id).reverse().map(obj => obj.id);
+    const newOrder = [...fabricCanvas.getObjects()].filter(obj => obj.id && !obj._isFill).reverse().map(obj => obj.id);
     setTrackOrder(newOrder);
   }, [fabricCanvas, setTrackOrder]);
 
@@ -174,6 +175,9 @@ const Timeline = () => {
           ))
         )}
       </Box>
+
+      {/* ===== AUDIO WAVEFORM TRACK (only visible when audio is uploaded) ===== */}
+      <AudioTrack />
 
       <Menu anchorEl={hiddenMenuAnchor} open={Boolean(hiddenMenuAnchor)} onClose={() => setHiddenMenuAnchor(null)}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }} transformOrigin={{ vertical: 'top', horizontal: 'right' }}
