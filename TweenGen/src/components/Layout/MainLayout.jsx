@@ -64,7 +64,7 @@ const MainLayout = () => {
               height: '100%',
               overflow: 'auto'
             }}>
-              <LivePreview />
+              <LivePreview isPreviewVisible={activeTab === 1} />
             </Box>
           </Box>
         </Box>

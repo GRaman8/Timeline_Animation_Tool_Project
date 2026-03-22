@@ -12,6 +12,7 @@ import {
   AddPhotoAlternate as ImageIcon,
   Category as ShapesIcon,
   ContentCopy as DuplicateIcon,
+  AudioFile as AudioIcon,
 } from '@mui/icons-material';
 
 import { 
@@ -19,8 +20,10 @@ import {
   useHasActiveSelection, useDrawingMode, useAnchorEditMode, useTrackOrder,
   useFillToolActive, useFillToolColor,
 } from '../../store/hooks';
+import { useAudioFile, useAudioWaveform } from '../../store/audioHooks';
 
 import { ungroupFabricGroup, findFabricObjectById } from '../../utils/fabricHelpers';
+import { generateWaveformPeaks } from '../../utils/audioUtils';
 import { getShapeDef } from '../../utils/shapeDefinitions';
 import ShapePicker from './ShapePicker';
 import * as fabric from 'fabric';
@@ -38,11 +41,16 @@ const Toolbar = () => {
   const [fillToolColor, setFillToolColor] = useFillToolColor();
   const [strokeCount, setStrokeCount] = useState(0);
 
+  // Audio state
+  const [audioFile, setAudioFile] = useAudioFile();
+  const [, setAudioWaveform] = useAudioWaveform();
+
   // Shape picker state
   const [shapePickerAnchor, setShapePickerAnchor] = useState(null);
   const shapeButtonRef = useRef(null);
 
   const fileInputRef = useRef(null);
+  const audioInputRef = useRef(null);
 
   const canGroup = fabricCanvas?.getActiveObjects().length > 1;
   
@@ -58,36 +66,25 @@ const Toolbar = () => {
     return () => clearInterval(interval);
   }, [drawingMode, fabricCanvas]);
 
-  // ===== ADD SHAPE (from ShapePicker) =====
+  // ===== ADD SHAPE =====
   const addShape = (shapeKey) => {
     if (!fabricCanvas) return;
     const shapeDef = getShapeDef(shapeKey);
     if (!shapeDef) return;
-
     const id = `element_${Date.now()}`;
     const count = canvasObjects.filter(obj => obj.type === shapeKey).length + 1;
     const name = `${shapeDef.label}_${count}`;
     const fill = shapeDef.defaultFill;
-
     const fabricObject = shapeDef.fabricCreate(id, fill);
     if (!fabricObject) return;
-
-    fabricCanvas.add(fabricObject);
-    fabricCanvas.setActiveObject(fabricObject);
-    fabricCanvas.renderAll();
-
+    fabricCanvas.add(fabricObject); fabricCanvas.setActiveObject(fabricObject); fabricCanvas.renderAll();
     const objData = { id, type: shapeKey, name, fill };
-
-    // For SVG-rendered shapes, store the SVG path for LivePreview / export
-    if (shapeDef.renderMode === 'svg') {
-      objData.svgPath = shapeDef.svgPath;
-    }
-
+    if (shapeDef.renderMode === 'svg') objData.svgPath = shapeDef.svgPath;
     setCanvasObjects(prev => [...prev, objData]);
     setKeyframes(prev => ({ ...prev, [id]: [] }));
   };
 
-  // ===== ADD TEXT (unchanged) =====
+  // ===== ADD TEXT =====
   const addText = () => {
     if (!fabricCanvas) return;
     const id = `element_${Date.now()}`;
@@ -105,7 +102,6 @@ const Toolbar = () => {
   const handleImageUpload = (event) => {
     const file = event.target.files?.[0];
     if (!file || !fabricCanvas) return;
-
     const reader = new FileReader();
     reader.onload = (loadEvent) => {
       const dataURL = loadEvent.target.result;
@@ -114,18 +110,14 @@ const Toolbar = () => {
         const id = `element_${Date.now()}`;
         const count = canvasObjects.filter(obj => obj.type === 'image').length + 1;
         const name = `Image_${count}`;
-
         let initScale = 1;
         const maxDim = 300;
         if (imgEl.naturalWidth > maxDim || imgEl.naturalHeight > maxDim) {
           initScale = maxDim / Math.max(imgEl.naturalWidth, imgEl.naturalHeight);
         }
-
         const fabricImg = new fabric.Image(imgEl, {
-          id, left: 350, top: 250, originX: 'center', originY: 'center',
-          scaleX: initScale, scaleY: initScale,
+          id, left: 350, top: 250, originX: 'center', originY: 'center', scaleX: initScale, scaleY: initScale,
         });
-
         fabricCanvas.add(fabricImg); fabricCanvas.setActiveObject(fabricImg); fabricCanvas.renderAll();
         setCanvasObjects(prev => [...prev, {
           id, type: 'image', name, imageDataURL: dataURL,
@@ -139,47 +131,72 @@ const Toolbar = () => {
     event.target.value = '';
   };
 
-  // ===== DUPLICATE SELECTED OBJECT =====
+  // ===== AUDIO UPLOAD =====
+  const handleAudioUpload = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      // Read as ArrayBuffer (for waveform + lossless export)
+      const arrayBuffer = await file.arrayBuffer();
+
+      // Read as dataURL (for HTMLAudioElement playback)
+      const dataURL = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => resolve(e.target.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+
+      // Generate waveform peaks
+      const { peaks, duration: audioDuration } = await generateWaveformPeaks(arrayBuffer, 300);
+
+      // Store audio data
+      setAudioFile({
+        dataURL,
+        fileName: file.name,
+        mimeType: file.type || 'audio/mpeg',
+        arrayBuffer, // Original bytes — untouched
+        duration: audioDuration,
+      });
+      setAudioWaveform(peaks);
+    } catch (err) {
+      console.error('Audio upload failed:', err);
+      alert('Failed to load audio file. Please try an MP3, WAV, or OGG file.');
+    }
+
+    event.target.value = '';
+  };
+
+  // ===== DUPLICATE OBJECT =====
   const duplicateObject = () => {
     if (!fabricCanvas || !selectedObject) return;
     const objData = canvasObjects.find(obj => obj.id === selectedObject);
     if (!objData) return;
-
     const fo = findFabricObjectById(fabricCanvas, selectedObject);
     if (!fo) return;
-
     const newId = `element_${Date.now()}`;
     const count = canvasObjects.filter(obj => obj.type === objData.type).length + 1;
-    const offset = 30; // Offset so copy doesn't sit directly on original
+    const offset = 30;
 
     if (objData.type === 'image') {
-      // Duplicate image: reuse the same dataURL
       const imgEl = document.createElement('img');
       imgEl.onload = () => {
         const newImg = new fabric.Image(imgEl, {
-          id: newId,
-          left: (fo.left || 350) + offset,
-          top: (fo.top || 250) + offset,
-          originX: 'center', originY: 'center',
-          scaleX: fo.scaleX || 1, scaleY: fo.scaleY || 1,
+          id: newId, left: (fo.left || 350) + offset, top: (fo.top || 250) + offset,
+          originX: 'center', originY: 'center', scaleX: fo.scaleX || 1, scaleY: fo.scaleY || 1,
           angle: fo.angle || 0, opacity: fo.opacity ?? 1,
         });
-        fabricCanvas.add(newImg);
-        fabricCanvas.setActiveObject(newImg);
-        fabricCanvas.renderAll();
-
+        fabricCanvas.add(newImg); fabricCanvas.setActiveObject(newImg); fabricCanvas.renderAll();
         setCanvasObjects(prev => [...prev, {
           id: newId, type: 'image', name: `Image_${count}`,
-          imageDataURL: objData.imageDataURL,
-          imageWidth: objData.imageWidth, imageHeight: objData.imageHeight,
+          imageDataURL: objData.imageDataURL, imageWidth: objData.imageWidth, imageHeight: objData.imageHeight,
         }]);
         setKeyframes(prev => ({ ...prev, [newId]: [] }));
         setSelectedObject(newId);
       };
       imgEl.src = objData.imageDataURL;
-
     } else if (objData.type === 'text') {
-      // Duplicate text
       const textContent = fo.text || objData.textContent || 'Text';
       const fillColor = fo.fill || objData.fill || '#000000';
       const newText = new fabric.Text(textContent, {
@@ -192,22 +209,18 @@ const Toolbar = () => {
       setCanvasObjects(prev => [...prev, { id: newId, type: 'text', name: `text_${count}`, textContent, fill: fillColor }]);
       setKeyframes(prev => ({ ...prev, [newId]: [] }));
       setSelectedObject(newId);
-
     } else if (objData.type !== 'path' && objData.type !== 'group') {
-      // Duplicate solid shapes (rectangle, circle, star, etc.)
       const shapeDef = getShapeDef(objData.type);
       if (!shapeDef) return;
       const fillColor = fo.fill || objData.fill || shapeDef.defaultFill;
       const newShape = shapeDef.fabricCreate(newId, fillColor);
       if (!newShape) return;
       newShape.set({
-        left: (fo.left || 350) + offset,
-        top: (fo.top || 250) + offset,
+        left: (fo.left || 350) + offset, top: (fo.top || 250) + offset,
         scaleX: fo.scaleX || 1, scaleY: fo.scaleY || 1,
         angle: fo.angle || 0, opacity: fo.opacity ?? 1,
       });
       fabricCanvas.add(newShape); fabricCanvas.setActiveObject(newShape); fabricCanvas.renderAll();
-
       const newObjData = { id: newId, type: objData.type, name: `${shapeDef.label}_${count}`, fill: fillColor };
       if (shapeDef.renderMode === 'svg') newObjData.svgPath = shapeDef.svgPath;
       setCanvasObjects(prev => [...prev, newObjData]);
@@ -216,7 +229,6 @@ const Toolbar = () => {
     }
   };
 
-  // Check if selected object can be duplicated (shapes, text, images — not groups or paths)
   const canDuplicate = React.useMemo(() => {
     if (!selectedObject) return false;
     const objData = canvasObjects.find(obj => obj.id === selectedObject);
@@ -265,6 +277,11 @@ const Toolbar = () => {
       if (fo?.id) {
         const objData = canvasObjects.find(obj => obj.id === fo.id);
         fabricCanvas.remove(fo);
+        if (objData?.fills?.length > 0) {
+          const fillIds = new Set(objData.fills.map(f => f.id));
+          fabricCanvas.getObjects().filter(o => o._isFill && fillIds.has(o.id))
+            .forEach(fillImg => fabricCanvas.remove(fillImg));
+        }
         setCanvasObjects(prev => {
           if (objData?.type === 'group' && objData.children) return prev.filter(obj => obj.id !== fo.id && !objData.children.includes(obj.id));
           return prev.filter(obj => obj.id !== fo.id);
@@ -290,11 +307,10 @@ const Toolbar = () => {
         if (typeof fabricCanvas.sendObjectBackwards === 'function') fabricCanvas.sendObjectBackwards(targetObject);
         else if (typeof fabricCanvas.sendBackwards === 'function') fabricCanvas.sendBackwards(targetObject);
       }
-    } catch (e) { console.warn('Layer ordering failed:', e); }
+    } catch (e) {}
     fabricCanvas.renderAll();
     const objects = fabricCanvas.getObjects();
-    const newTrackOrder = [...objects].filter(obj => obj.id).reverse().map(obj => obj.id);
-    setTrackOrder(newTrackOrder);
+    setTrackOrder([...objects].filter(obj => obj.id).reverse().map(obj => obj.id));
   };
 
   const toggleDrawingMode = () => {
@@ -305,54 +321,37 @@ const Toolbar = () => {
     if (!drawingMode) { fabricCanvas.discardActiveObject(); fabricCanvas.renderAll(); setSelectedObject(null); }
   };
 
-  const finishDrawing = () => {
-    if (fabricCanvas?._commitDrawing) fabricCanvas._commitDrawing();
-  };
+  const finishDrawing = () => { if (fabricCanvas?._commitDrawing) fabricCanvas._commitDrawing(); };
 
   const toggleFillTool = () => {
-    if (drawingMode) {
-      if (fabricCanvas?._commitDrawing) fabricCanvas._commitDrawing();
-      setDrawingMode(false);
-    }
+    if (drawingMode) { if (fabricCanvas?._commitDrawing) fabricCanvas._commitDrawing(); setDrawingMode(false); }
     setFillToolActive(!fillToolActive);
   };
 
   return (
     <Paper sx={{ width: 80, display: 'flex', flexDirection: 'column', p: 1, gap: 1, borderRadius: 0 }}>
-      {/* SHAPES PICKER — single button opens flyout */}
       <Tooltip title="Add Shape" placement="right">
-        <IconButton
-          ref={shapeButtonRef}
-          onClick={() => setShapePickerAnchor(shapeButtonRef.current)}
-          color="primary"
-        >
-          <ShapesIcon />
-        </IconButton>
+        <IconButton ref={shapeButtonRef} onClick={() => setShapePickerAnchor(shapeButtonRef.current)} color="primary"><ShapesIcon /></IconButton>
       </Tooltip>
-      <ShapePicker
-        anchorEl={shapePickerAnchor}
-        open={Boolean(shapePickerAnchor)}
-        onClose={() => setShapePickerAnchor(null)}
-        onSelectShape={addShape}
-      />
+      <ShapePicker anchorEl={shapePickerAnchor} open={Boolean(shapePickerAnchor)} onClose={() => setShapePickerAnchor(null)} onSelectShape={addShape} />
 
       <Tooltip title="Add Text" placement="right">
         <IconButton onClick={addText} color="primary"><TextIcon /></IconButton>
       </Tooltip>
 
-      {/* IMAGE UPLOAD */}
       <Tooltip title="Upload Image" placement="right">
-        <IconButton onClick={() => fileInputRef.current?.click()} color="primary">
-          <ImageIcon />
+        <IconButton onClick={() => fileInputRef.current?.click()} color="primary"><ImageIcon /></IconButton>
+      </Tooltip>
+      <input ref={fileInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleImageUpload} />
+
+      {/* AUDIO UPLOAD */}
+      <Tooltip title={audioFile ? "Replace Audio" : "Upload Audio (BGM)"} placement="right">
+        <IconButton onClick={() => audioInputRef.current?.click()} color={audioFile ? "secondary" : "primary"}
+          sx={audioFile ? { bgcolor: 'secondary.light', '&:hover': { bgcolor: 'secondary.main', color: 'white' } } : {}}>
+          <AudioIcon />
         </IconButton>
       </Tooltip>
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="image/*"
-        style={{ display: 'none' }}
-        onChange={handleImageUpload}
-      />
+      <input ref={audioInputRef} type="file" accept=".mp3,.wav,.ogg,.aac,.m4a,.webm,audio/*" style={{ display: 'none' }} onChange={handleAudioUpload} />
 
       <Tooltip title={drawingMode ? "Exit Drawing Mode (ESC)" : "Drawing Mode"} placement="right">
         <IconButton onClick={toggleDrawingMode} color={drawingMode ? "secondary" : "primary"}>
@@ -363,13 +362,11 @@ const Toolbar = () => {
       {drawingMode && strokeCount > 0 && (
         <Tooltip title="Finish Drawing (Enter)" placement="right">
           <IconButton onClick={finishDrawing} color="success"
-            sx={{ bgcolor: 'success.light', '&:hover': { bgcolor: 'success.main', color: 'white' } }}>
-            <CheckIcon />
-          </IconButton>
+            sx={{ bgcolor: 'success.light', '&:hover': { bgcolor: 'success.main', color: 'white' } }}><CheckIcon /></IconButton>
         </Tooltip>
       )}
 
-      <Tooltip title={fillToolActive ? "Exit Paint Bucket (ESC)" : "Paint Bucket Fill (like MS Paint)"} placement="right">
+      <Tooltip title={fillToolActive ? "Exit Paint Bucket (ESC)" : "Paint Bucket Fill"} placement="right">
         <IconButton onClick={toggleFillTool} color={fillToolActive ? "secondary" : "primary"}
           sx={fillToolActive ? { bgcolor: 'secondary.light', '&:hover': { bgcolor: 'secondary.main', color: 'white' } } : {}}>
           <FillIcon />
@@ -377,44 +374,32 @@ const Toolbar = () => {
       </Tooltip>
 
       {fillToolActive && (
-        <Tooltip title="Fill color — click to change" placement="right">
+        <Tooltip title="Fill color" placement="right">
           <Box sx={{ display: 'flex', justifyContent: 'center' }}>
-            <input 
-              type="color" 
-              value={fillToolColor} 
-              onChange={(e) => setFillToolColor(e.target.value)}
-              style={{ width: 36, height: 36, cursor: 'pointer', border: '2px solid #333', borderRadius: 4, padding: 0 }}
-            />
+            <input type="color" value={fillToolColor} onChange={(e) => setFillToolColor(e.target.value)}
+              style={{ width: 36, height: 36, cursor: 'pointer', border: '2px solid #333', borderRadius: 4, padding: 0 }} />
           </Box>
         </Tooltip>
       )}
 
       <Tooltip title={anchorEditMode ? "Exit Anchor Mode" : "Edit Anchor Point"} placement="right">
-        <IconButton onClick={() => setAnchorEditMode(!anchorEditMode)} color={anchorEditMode ? "secondary" : "primary"} disabled={!selectedObject}>
-          <AnchorIcon />
-        </IconButton>
+        <IconButton onClick={() => setAnchorEditMode(!anchorEditMode)} color={anchorEditMode ? "secondary" : "primary"} disabled={!selectedObject}><AnchorIcon /></IconButton>
       </Tooltip>
-      
+
       <Divider sx={{ my: 1 }} />
 
-      {/* DUPLICATE OBJECT */}
       <Tooltip title="Duplicate Selected Object" placement="right">
-        <span>
-          <IconButton onClick={duplicateObject} disabled={!canDuplicate} color="primary">
-            <DuplicateIcon />
-          </IconButton>
-        </span>
+        <span><IconButton onClick={duplicateObject} disabled={!canDuplicate} color="primary"><DuplicateIcon /></IconButton></span>
       </Tooltip>
-      
       <Tooltip title="Group Selected (Cmd/Ctrl+G)" placement="right">
         <span><IconButton onClick={groupObjects} disabled={!canGroup} color="primary"><GroupIcon /></IconButton></span>
       </Tooltip>
       <Tooltip title="Ungroup (Cmd/Ctrl+Shift+G)" placement="right">
         <span><IconButton onClick={ungroupObjects} disabled={!canUngroup} color="primary"><UngroupIcon /></IconButton></span>
       </Tooltip>
-      
+
       <Divider sx={{ my: 1 }} />
-      
+
       <Tooltip title="Delete Selected" placement="right">
         <span><IconButton onClick={deleteObject} disabled={!hasActiveSelection} color="error"><DeleteIcon /></IconButton></span>
       </Tooltip>
